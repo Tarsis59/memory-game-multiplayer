@@ -291,8 +291,8 @@ memory-game/
 
 ## Autores
 
-- [Seu Nome] - [Matricula]
-- [Nome 2] - [Matricula]
+- Tarsis Carvalho Barreto
+- Ylo Bittencourt
 
 ## Licenca
 
