@@ -194,6 +194,7 @@ def main():
     t.start()
 
     try:
+        flips_in_turn = 0
         while not game_over:
             if my_turn:
                 try:
@@ -209,12 +210,16 @@ def main():
                     pos = int(entry)
                     if 0 <= pos <= 15:
                         sock.sendall(encode(CMD_FLIP, str(pos)))
-                        my_turn = False
+                        flips_in_turn += 1
+                        if flips_in_turn >= 2:
+                            my_turn = False
+                            flips_in_turn = 0
                     else:
                         print("  Posicao invalida. Digite entre 0 e 15.")
                 except ValueError:
                     print("  Digite um numero de 0 a 15.")
             else:
+                flips_in_turn = 0
                 time.sleep(0.1)
     except KeyboardInterrupt:
         sock.sendall(encode(CMD_QUIT))
