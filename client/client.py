@@ -29,6 +29,7 @@ scores       = {}
 my_turn      = False
 game_over    = False
 my_name      = ""
+my_matches   = []  # (symbol, [pos1, pos2]) para cada par que este jogador encontrou
 board_lock   = threading.Lock()
 
 # Fila de entrada: thread do input coloca, main consome
@@ -82,9 +83,10 @@ def input_listener():
 
 
 def receiver(sock):
-    """Thread que recebe mensagens do servidor e atualiza estado."""
-    global my_turn, game_over
+    """Thread que recebe mensagens do servidor, atualiza estado E mostra prompt."""
+    global my_turn, game_over, my_matches
     reader = ProtocolReader()
+    receiver_flips = 0  # quantas cartas este jogador virou no turno atual
 
     while True:
         raw = reader.recv_message(sock)
@@ -106,17 +108,22 @@ def receiver(sock):
                     board[i]    = "?"
                     revealed[i] = False
                 players = payload.get("players", [])
+                my_matches.clear()
                 render_board()
                 render_status(f"Jogo iniciado! Jogadores: {' vs '.join(players)}")
+                receiver_flips = 0
                 time.sleep(1)
 
             elif command == CMD_YOUR_TURN:
                 my_turn = True
+                receiver_flips = 0
                 render_board()
                 render_status(f"{my_name}, sua vez!")
+                print(f"  >> {my_name}, SUA VEZ! Escolha a PRIMEIRA carta (0-15): ", flush=True)
 
             elif command == CMD_WAIT_TURN:
                 my_turn = False
+                receiver_flips = 0
                 render_board()
                 render_status(f"Vez de {arg}... aguarde.")
 
@@ -127,6 +134,10 @@ def receiver(sock):
                 board[pos] = symbol
                 render_board()
                 render_status(f"{player} escolheu posicao {pos} -> [{symbol}]")
+                if player == my_name:
+                    receiver_flips += 1
+                    if receiver_flips == 1 and my_turn:
+                        print(f"  >> Agora escolha a SEGUNDA carta (0-15): ", flush=True)
 
             elif command == CMD_MATCH and payload:
                 positions = payload["positions"]
@@ -137,14 +148,16 @@ def receiver(sock):
                     board[pos]    = symbol
                 render_board()
                 render_status(f"PAR! {player} encontrou [{symbol}] nas posicoes {positions}!")
+                if player == my_name:
+                    my_matches.append((symbol, list(positions)))
                 time.sleep(1)
 
             elif command == CMD_NO_MATCH and payload:
                 positions = payload["positions"]
                 player    = payload["player"]
-                # Mostra cartas por 2.5s antes de esconder
                 render_board()
-                render_status(f"Sem par! {player} errou. Veja as cartas...")
+                cards_str = " e ".join(f"[{board[p]}] na posicao {p}" for p in positions)
+                render_status(f"{player}, suas cartas: {cards_str}")
                 time.sleep(2.5)
                 for pos in positions:
                     board[pos] = "?"
@@ -160,10 +173,26 @@ def receiver(sock):
                 final_scores = payload.get("scores", {})
                 winner       = payload.get("winner", "?")
                 scores.update(final_scores)
+
+                # Fase 1: revela tabuleiro completo por 2.5s
+                render_board()
+                render_status("Fim de jogo! Revelando todas as cartas...")
+                time.sleep(2.5)
+
+                # Fase 2: tela final com resumo das cartas
                 render_board()
                 print("=" * 42)
                 print("         FIM DE JOGO!")
                 print("=" * 42)
+
+                # Resumo das cartas que ESTE jogador encontrou
+                if my_matches:
+                    print(f"\n  {my_name}, suas cartas encontradas:")
+                    for symbol, poss in my_matches:
+                        pos_str = " e ".join(str(p) for p in poss)
+                        print(f"    [{symbol}] nas posicoes {pos_str}")
+                    print()
+
                 for name, pts in final_scores.items():
                     crown = " VENCEDOR" if name == winner else ""
                     print(f"  {crown:>10} {name}: {pts} pontos")
@@ -214,25 +243,16 @@ def main():
     inp = threading.Thread(target=input_listener, daemon=True)
     inp.start()
 
-    # Loop principal: gerencia UI e input
+    # Loop principal: SOMENTE le input e envia comandos
+    # Toda a saida (tabuleiro, status, prompts) fica na thread receiver
     flips_in_turn = 0
-    prompt_shown  = False
 
     try:
         while not game_over:
             if my_turn:
-                if not prompt_shown:
-                    if flips_in_turn == 0:
-                        print(f"\n  >> {my_name}, SUA VEZ! Escolha a PRIMEIRA carta (0-15): ", end="", flush=True)
-                    else:
-                        print(f"\n  >> Agora escolha a SEGUNDA carta (0-15): ", end="", flush=True)
-                    prompt_shown = True
-
-                # Verifica se tem input na fila (nao bloqueante)
                 try:
-                    entry = input_queue.get_nowait()
+                    entry = input_queue.get(timeout=0.1)
                 except queue.Empty:
-                    time.sleep(0.05)
                     continue
 
                 if not entry:
@@ -246,19 +266,15 @@ def main():
                     if 0 <= pos <= 15:
                         sock.sendall(encode(CMD_FLIP, str(pos)))
                         flips_in_turn += 1
-                        prompt_shown = False  # precisa mostrar prompt de novo
                         if flips_in_turn >= 2:
                             my_turn = False
                             flips_in_turn = 0
                     else:
                         print("  Posicao invalida. Digite entre 0 e 15.")
-                        prompt_shown = False
                 except ValueError:
                     print("  Digite um numero de 0 a 15.")
-                    prompt_shown = False
             else:
                 flips_in_turn = 0
-                prompt_shown  = False
                 time.sleep(0.05)
 
     except KeyboardInterrupt:
