@@ -170,7 +170,7 @@ def receiver(sock):
 
 
 def main():
-    global my_name
+    global my_name, my_turn, game_over
 
     if len(sys.argv) > 1:
         my_name = sys.argv[1]
