@@ -1,4 +1,4 @@
-﻿"""
+"""
 Cliente do Jogo da Memoria Multiplayer - MGAME/1.0
 Execute duas vezes em terminais separados para jogar.
 """
@@ -7,10 +7,11 @@ import threading
 import sys
 import os
 import time
+import queue
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.protocol import (
-    encode, decode, recv_message,
+    encode, decode, ProtocolReader,
     CMD_JOIN, CMD_FLIP, CMD_QUIT,
     CMD_OK, CMD_ERR, CMD_GAME_START,
     CMD_YOUR_TURN, CMD_WAIT_TURN,
@@ -29,6 +30,9 @@ my_turn      = False
 game_over    = False
 my_name      = ""
 board_lock   = threading.Lock()
+
+# Fila de entrada: thread do input coloca, main consome
+input_queue = queue.Queue()
 
 
 def _clear():
@@ -66,13 +70,25 @@ def render_status(msg: str):
     print()
 
 
+def input_listener():
+    """Thread que le linhas do stdin e coloca na fila."""
+    while not game_over:
+        try:
+            line = sys.stdin.readline()
+            if line:
+                input_queue.put(line.strip())
+        except (EOFError, OSError):
+            break
+
+
 def receiver(sock):
+    """Thread que recebe mensagens do servidor e atualiza estado."""
     global my_turn, game_over
+    reader = ProtocolReader()
 
     while True:
-        raw = recv_message(sock)
+        raw = reader.recv_message(sock)
         if raw is None:
-            print("\n[CLIENTE] Conexao encerrada pelo servidor.")
             game_over = True
             break
 
@@ -97,7 +113,7 @@ def receiver(sock):
             elif command == CMD_YOUR_TURN:
                 my_turn = True
                 render_board()
-                render_status("SUA VEZ! Digite a posicao (0-15):")
+                render_status(f"{my_name}, sua vez!")
 
             elif command == CMD_WAIT_TURN:
                 my_turn = False
@@ -110,8 +126,7 @@ def receiver(sock):
                 player = payload["player"]
                 board[pos] = symbol
                 render_board()
-                render_status(f"{player} virou posicao {pos} -> [{symbol}]")
-                time.sleep(0.8)
+                render_status(f"{player} escolheu posicao {pos} -> [{symbol}]")
 
             elif command == CMD_MATCH and payload:
                 positions = payload["positions"]
@@ -122,16 +137,19 @@ def receiver(sock):
                     board[pos]    = symbol
                 render_board()
                 render_status(f"PAR! {player} encontrou [{symbol}] nas posicoes {positions}!")
-                time.sleep(1.2)
+                time.sleep(1)
 
             elif command == CMD_NO_MATCH and payload:
                 positions = payload["positions"]
                 player    = payload["player"]
+                # Mostra cartas por 2.5s antes de esconder
                 render_board()
-                render_status(f"Sem par! {player} errou posicoes {positions}. Cartas viradas de volta.")
-                time.sleep(1.5)
+                render_status(f"Sem par! {player} errou. Veja as cartas...")
+                time.sleep(2.5)
                 for pos in positions:
                     board[pos] = "?"
+                render_board()
+                render_status(f"Sem par! Cartas viradas. Proximo jogador.")
 
             elif command == CMD_SCORE_UPDATE and payload:
                 scores.update(payload.get("scores", {}))
@@ -162,8 +180,7 @@ def receiver(sock):
                 render_status(f"{arg} abandonou o jogo. Partida encerrada.")
 
             elif command == CMD_ERR:
-                render_board()
-                render_status(f"Erro: {arg}")
+                print(f"\n  [ERRO] {arg}\n")
 
             elif command == CMD_BYE:
                 break
@@ -187,45 +204,69 @@ def main():
         return
 
     print(f"[CLIENTE] Conectado como '{my_name}'")
-
     sock.sendall(encode(CMD_JOIN, my_name))
 
+    # Inicia receptor em thread separada
     t = threading.Thread(target=receiver, args=(sock,), daemon=True)
     t.start()
 
+    # Inicia listener de input em thread separada
+    inp = threading.Thread(target=input_listener, daemon=True)
+    inp.start()
+
+    # Loop principal: gerencia UI e input
+    flips_in_turn = 0
+    prompt_shown  = False
+
     try:
-        flips_in_turn = 0
         while not game_over:
             if my_turn:
+                if not prompt_shown:
+                    if flips_in_turn == 0:
+                        print(f"\n  >> {my_name}, SUA VEZ! Escolha a PRIMEIRA carta (0-15): ", end="", flush=True)
+                    else:
+                        print(f"\n  >> Agora escolha a SEGUNDA carta (0-15): ", end="", flush=True)
+                    prompt_shown = True
+
+                # Verifica se tem input na fila (nao bloqueante)
                 try:
-                    entry = input().strip()
-                except EOFError:
-                    break
+                    entry = input_queue.get_nowait()
+                except queue.Empty:
+                    time.sleep(0.05)
+                    continue
+
                 if not entry:
                     continue
                 if entry.lower() in ("quit", "sair", "q"):
                     sock.sendall(encode(CMD_QUIT))
                     break
+
                 try:
                     pos = int(entry)
                     if 0 <= pos <= 15:
                         sock.sendall(encode(CMD_FLIP, str(pos)))
                         flips_in_turn += 1
+                        prompt_shown = False  # precisa mostrar prompt de novo
                         if flips_in_turn >= 2:
                             my_turn = False
                             flips_in_turn = 0
                     else:
                         print("  Posicao invalida. Digite entre 0 e 15.")
+                        prompt_shown = False
                 except ValueError:
                     print("  Digite um numero de 0 a 15.")
+                    prompt_shown = False
             else:
                 flips_in_turn = 0
-                time.sleep(0.1)
+                prompt_shown  = False
+                time.sleep(0.05)
+
     except KeyboardInterrupt:
         sock.sendall(encode(CMD_QUIT))
     finally:
+        game_over = True
         sock.close()
-        print("[CLIENTE] Desconectado. Ate a proxima!")
+        print("\n[CLIENTE] Desconectado. Ate a proxima!")
 
 
 if __name__ == "__main__":
