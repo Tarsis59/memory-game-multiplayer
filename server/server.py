@@ -109,7 +109,7 @@ def handle_client(conn, addr):
                     break
             threading.Event().wait(0.2)
 
-        if start_game and room.players[0]["name"] == player_name:
+        if start_game:
             _start_game()
 
         # -- Loop principal do jogo ---------------------------------------
