@@ -136,7 +136,9 @@ def receiver(sock):
                 render_status(f"{player} escolheu posicao {pos} -> [{symbol}]")
                 if player == my_name:
                     receiver_flips += 1
-                    if receiver_flips == 1 and my_turn:
+                    if receiver_flips >= 2:
+                        my_turn = False
+                    elif receiver_flips == 1:
                         print(f"  >> Agora escolha a SEGUNDA carta (0-15): ", flush=True)
 
             elif command == CMD_MATCH and payload:
@@ -158,7 +160,7 @@ def receiver(sock):
                 render_board()
                 cards_str = " e ".join(f"[{board[p]}] na posicao {p}" for p in positions)
                 render_status(f"{player}, suas cartas: {cards_str}")
-                time.sleep(2.5)
+                time.sleep(3.0)
                 for pos in positions:
                     board[pos] = "?"
                 render_board()
@@ -174,10 +176,10 @@ def receiver(sock):
                 winner       = payload.get("winner", "?")
                 scores.update(final_scores)
 
-                # Fase 1: revela tabuleiro completo por 2.5s
+                # Fase 1: revela tabuleiro completo por 3.0s
                 render_board()
                 render_status("Fim de jogo! Revelando todas as cartas...")
-                time.sleep(2.5)
+                time.sleep(3.0)
 
                 # Fase 2: tela final com resumo das cartas
                 render_board()
@@ -210,6 +212,11 @@ def receiver(sock):
 
             elif command == CMD_ERR:
                 print(f"\n  [ERRO] {arg}\n")
+                if arg == "ALREADY_OPEN" and my_turn:
+                    if receiver_flips == 0:
+                        print(f"  >> Escolha a PRIMEIRA carta (0-15): ", flush=True)
+                    else:
+                        print(f"  >> Escolha a SEGUNDA carta (0-15): ", flush=True)
 
             elif command == CMD_BYE:
                 break
@@ -245,7 +252,7 @@ def main():
 
     # Loop principal: SOMENTE le input e envia comandos
     # Toda a saida (tabuleiro, status, prompts) fica na thread receiver
-    flips_in_turn = 0
+    # O proprio receiver controla my_turn via contagem de CARD_REVEALED
 
     try:
         while not game_over:
@@ -264,17 +271,16 @@ def main():
                 try:
                     pos = int(entry)
                     if 0 <= pos <= 15:
+                        with board_lock:
+                            if revealed[pos]:
+                                print("  Carta ja revelada! Escolha outra posicao.")
+                                continue
                         sock.sendall(encode(CMD_FLIP, str(pos)))
-                        flips_in_turn += 1
-                        if flips_in_turn >= 2:
-                            my_turn = False
-                            flips_in_turn = 0
                     else:
                         print("  Posicao invalida. Digite entre 0 e 15.")
                 except ValueError:
                     print("  Digite um numero de 0 a 15.")
             else:
-                flips_in_turn = 0
                 time.sleep(0.05)
 
     except KeyboardInterrupt:
