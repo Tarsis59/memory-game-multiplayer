@@ -3,6 +3,7 @@ Protocolo MGAME/1.0 — Memory Game Multiplayer
 Formato: COMANDO ARGUMENTO\r\n[JSON\r\n]
 """
 import json
+import socket
 
 ENCODING  = "utf-8"
 DELIMITER = "\r\n"
@@ -67,18 +68,80 @@ def decode(raw: str):
     return command, arg, payload
 
 
+COMMANDS_WITH_PAYLOAD = {
+    CMD_GAME_START, CMD_CARD_REVEALED, CMD_MATCH,
+    CMD_NO_MATCH, CMD_SCORE_UPDATE, CMD_GAME_OVER,
+}
+
+
+class ProtocolReader:
+    """Leitor de mensagens com buffer persistente por conexao.
+
+    Garante que mensagens sejam extraidas uma por vez, mesmo quando
+    multiplas mensagens chegam em unico recv(). O buffer interno
+    preserva dados nao consumidos entre chamadas.
+    """
+
+    def __init__(self):
+        self._buffer = ""
+
+    def recv_message(self, sock):
+        """Le uma mensagem completa do socket. Retorna str ou None."""
+        while True:
+            # Tenta extrair uma mensagem do buffer atual
+            msg, restante = self._extract_one()
+            if msg is not None:
+                self._buffer = restante
+                return msg
+
+            # Precisa de mais dados
+            try:
+                chunk = sock.recv(4096).decode(ENCODING)
+                if not chunk:
+                    return None
+                self._buffer += chunk
+            except socket.timeout:
+                raise
+            except Exception:
+                return None
+
+    def _extract_one(self):
+        """Tenta extrair exatamente 1 mensagem do buffer interno.
+
+        Retorna (mensagem, restante) ou (None, buffer_original).
+        """
+        first = self._buffer.find(DELIMITER)
+        if first == -1:
+            return None, self._buffer
+
+        header_line = self._buffer[:first]
+        cmd = header_line.split(" ", 1)[0]
+
+        if cmd in COMMANDS_WITH_PAYLOAD:
+            # Precisa de 2o \r\n (payload JSON)
+            rest = self._buffer[first + 2:]
+            second = rest.find(DELIMITER)
+            if second == -1:
+                return None, self._buffer
+            end = first + 2 + second + 2
+            return self._buffer[:end], self._buffer[end:]
+        else:
+            # So o cabecalho (1 \r\n)
+            return self._buffer[:first + 2], self._buffer[first + 2:]
+
+
+# Funcao legada — mantida para compatibilidade com testes existentes.
+# Novos codigos devem usar ProtocolReader.
+_recv_buffers = {}
+
 def recv_message(sock):
     """Le do socket ate receber mensagem completa. Retorna str ou None."""
-    buffer = ""
-    while True:
-        try:
-            chunk = sock.recv(4096).decode(ENCODING)
-            if not chunk:
-                return None
-            buffer += chunk
-            if buffer.count(DELIMITER) >= 2:
-                return buffer
-            if buffer.endswith(DELIMITER):
-                return buffer
-        except Exception:
-            return None
+    fd = sock.fileno()
+    buffer = _recv_buffers.pop(fd, "")
+    reader = ProtocolReader()
+    reader._buffer = buffer
+    result = reader.recv_message(sock)
+    sobra = reader._buffer
+    if sobra:
+        _recv_buffers[fd] = sobra
+    return result

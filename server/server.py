@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.protocol import (
-    encode, decode, recv_message,
+    encode, decode, ProtocolReader,
     CMD_JOIN, CMD_FLIP, CMD_QUIT,
     CMD_OK, CMD_ERR, CMD_GAME_START,
     CMD_YOUR_TURN, CMD_WAIT_TURN,
@@ -69,10 +69,11 @@ room = GameRoom()
 
 def handle_client(conn, addr):
     player_name = None
+    reader = ProtocolReader()
 
     try:
         # -- JOIN ----------------------------------------------------------
-        raw = recv_message(conn)
+        raw = reader.recv_message(conn)
         if raw is None:
             return
         command, arg, _ = decode(raw)
@@ -114,7 +115,7 @@ def handle_client(conn, addr):
 
         # -- Loop principal do jogo ---------------------------------------
         while True:
-            raw = recv_message(conn)
+            raw = reader.recv_message(conn)
             if raw is None:
                 break
             command, arg, _ = decode(raw)
@@ -129,17 +130,25 @@ def handle_client(conn, addr):
 
     except Exception as e:
         print(f"[SERVER] Erro com {addr}: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if player_name:
             print(f"[SERVER] '{player_name}' desconectou.")
-            other = room.other_player(player_name)
-            if other:
-                try:
-                    other["conn"].sendall(encode(CMD_PLAYER_LEFT, player_name))
-                except Exception:
-                    pass
             with room.lock:
-                room.players = [p for p in room.players if p["name"] != player_name]
+                remaining = room.other_player(player_name)
+                if remaining:
+                    scores = {p["name"]: p["score"] for p in room.players if p["name"] != player_name}
+                    winner = remaining["name"]
+                    try:
+                        remaining["conn"].sendall(encode(CMD_GAME_OVER, "", {
+                            "scores": scores, "winner": winner
+                        }))
+                    except Exception:
+                        pass
+                    # Nao fecha a conexao do outro jogador aqui —
+                    # ele precisa processar GAME_OVER e sair normalmente.
+                room.players = []
         conn.close()
 
 
@@ -170,6 +179,10 @@ def _notify_turn():
 def _handle_flip(player_name: str, arg: str, conn):
     """Processa o comando FLIP de um jogador."""
     with room.lock:
+        # Verifica se o jogo ainda tem 2 jogadores
+        if len(room.players) < 2 or room.current_turn >= len(room.players):
+            conn.sendall(encode(CMD_ERR, "GAME_OVER"))
+            return
         # Valida turno
         if room.players[room.current_turn]["name"] != player_name:
             conn.sendall(encode(CMD_ERR, ERR_NOT_YOUR_TURN))
