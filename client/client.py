@@ -40,36 +40,65 @@ def _clear():
     os.system("cls" if os.name == "nt" else "clear")
 
 
+# Cores ANSI
+R   = "\033[0m"
+VR  = "\033[92m"  # verde
+VM  = "\033[91m"  # vermelho
+AM  = "\033[93m"  # amarelo
+AZ  = "\033[94m"  # azul
+MG  = "\033[95m"  # magenta
+CI  = "\033[96m"  # ciano
+BR  = "\033[1m"   # bold
+
+# Cor para cada simbolo de carta
+CORES_CARTAS = {
+    "A": "\033[91m", "B": "\033[92m", "C": "\033[93m",
+    "D": "\033[94m", "E": "\033[95m", "F": "\033[96m",
+    "G": "\033[92;1m", "H": "\033[93;1m",
+}
+
 def render_board():
     _clear()
-    print("=" * 42)
-    print("   JOGO DA MEMORIA MULTIPLAYER")
-    print("=" * 42)
+    print(f"{CI}{'=' * 42}{R}")
+    print(f"{AM}   JOGO DA MEMORIA MULTIPLAYER{R}")
+    print(f"{CI}{'=' * 42}{R}")
 
     if scores:
-        placar = "  ".join(f"{n}: {s} pts" for n, s in scores.items())
-        print(f"  Placar -> {placar}")
+        placar = f"{CI}  Placar ->{R}  " + f"  {R}".join(
+            f"{BR}{n}{R}: {VR}{s}{R} pts" for n, s in scores.items()
+        )
+        print(placar)
     print()
 
-    print("     0    1    2    3")
-    print("  +----+----+----+----+")
+    print(f"     {AZ}0{R}    {AZ}1{R}    {AZ}2{R}    {AZ}3{R}")
+    print(f"  {CI}+----+----+----+----+{R}")
     for row in range(4):
         cells = ""
         for col in range(4):
             pos = row * 4 + col
-            val = board[pos] if revealed[pos] or board[pos] != "?" else "?"
-            cells += f" {val:^3}|"
-        print(f"{row} |{cells}")
+            if revealed[pos] or board[pos] != "?":
+                simbolo = board[pos]
+                cor = CORES_CARTAS.get(simbolo, BR)
+                val = f"{cor}{simbolo:^3}{R}"
+            else:
+                val = f" {AM}?{R} "
+            cells += f"{val}|"
+        print(f"{AZ}{row}{R} |{cells}")
         if row < 3:
-            print("  +----+----+----+----+")
-    print("  +----+----+----+----+")
+            print(f"  {CI}+----+----+----+----+{R}")
+    print(f"  {CI}+----+----+----+----+{R}")
     print()
-
 
 def render_status(msg: str):
+    # Colore a mensagem baseada no conteudo
+    if "PAR!" in msg or "Vencedor" in msg:
+        msg = f"{VR}{msg}{R}"
+    elif "erro" in msg or "Erro" in msg or "ERRO" in msg:
+        msg = f"{VM}{msg}{R}"
+    elif "sua vez" in msg.lower():
+        msg = f"{AM}{msg}{R}"
     print(f"  >> {msg}")
     print()
-
 
 def input_listener():
     """Thread que le linhas do stdin e coloca na fila."""
