@@ -3,12 +3,14 @@ Servidor arbitro do Jogo da Memoria Multiplayer - MGAME/1.0
 - Aguarda exatamente 2 jogadores
 - Controla tabuleiro, turnos, pontuacao e vitoria
 - Faz broadcast de eventos para ambos os clientes
+- Possui controle de inatividade (Heartbeat)
 """
 import socket
 import threading
 import random
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.protocol import (
@@ -19,13 +21,14 @@ from shared.protocol import (
     CMD_CARD_REVEALED, CMD_MATCH, CMD_NO_MATCH,
     CMD_SCORE_UPDATE, CMD_GAME_OVER,
     CMD_PLAYER_LEFT, CMD_BYE,
+    CMD_PING, CMD_PONG,
     ARG_WAITING,
     ERR_NAME_TAKEN, ERR_NOT_YOUR_TURN,
     ERR_INVALID_POS, ERR_ALREADY_OPEN,
 )
 
-HOST       = "0.0.0.0"
-PORT       = 9000
+HOST = "0.0.0.0"
+PORT = 9000
 BOARD_SIZE = 16
 
 
@@ -33,18 +36,19 @@ class GameRoom:
     """Gerencia o estado completo de uma partida."""
 
     def __init__(self):
-        self.players      = []
-        self.board        = []
-        self.revealed     = []
+        self.players = []
+        self.board = []
+        self.revealed = []
         self.current_turn = 0
-        self.first_flip   = None
-        self.lock         = threading.Lock()
-        self.started      = False
+        self.first_flip = None
+        self.lock = threading.Lock()
+        self.started = False
+        self.last_seen = {}  # Armazena o timestamp de cada jogador
 
     def build_board(self):
         symbols = list("ABCDEFGH") * 2
         random.shuffle(symbols)
-        self.board    = symbols
+        self.board = symbols
         self.revealed = [False] * BOARD_SIZE
 
     def all_revealed(self):
@@ -63,8 +67,34 @@ class GameRoom:
                 return p
         return None
 
-
 room = GameRoom()
+
+def monitor_heartbeats():
+    # Verificar se as conexões estão ativas
+    while True:
+        time.sleep(10) # Avalia a cada 10 segundos
+        now = time.time()
+        
+        with room.lock:
+            # list() cria uma cópia rápida para iterar em segurança
+            for p in list(room.players):
+                name = p["name"]
+                conn = p["conn"]
+                last = room.last_seen.get(name, now)
+                
+                # Se não recebe dados (ou PONG) há 10 segundos, caiu
+                if now - last > 10:
+                    print(f"[SERVER] Timeout! Desconectando '{name}' por inatividade.")
+                    try:
+                        conn.close() # Força o recv_message do handle_client a falhar e limpar a sala
+                    except Exception:
+                        pass
+                else:
+                    # Envia PING para provocar uma resposta e manter o timer fresco
+                    try:
+                        conn.sendall(encode(CMD_PING))
+                    except Exception:
+                        pass
 
 
 def handle_client(conn, addr):
@@ -72,7 +102,7 @@ def handle_client(conn, addr):
     reader = ProtocolReader()
 
     try:
-        # -- JOIN ----------------------------------------------------------
+        # -- JOIN --
         raw = reader.recv_message(conn)
         if raw is None:
             return
@@ -93,12 +123,15 @@ def handle_client(conn, addr):
                     conn.sendall(encode(CMD_ERR, ERR_NAME_TAKEN))
                     return
             room.players.append({"name": player_name, "conn": conn, "score": 0})
+            
+            # Inicializa o heartbeat do jogador
+            room.last_seen[player_name] = time.time()
             player_count = len(room.players)
 
         print(f"[SERVER] '{player_name}' entrou ({player_count}/2)")
         conn.sendall(encode(CMD_OK, ARG_WAITING))
 
-        # -- Aguarda 2o jogador -------------------------------------------
+        # -- Aguarda 2o jogador --
         while True:
             with room.lock:
                 if len(room.players) == 2 and not room.started:
@@ -113,12 +146,21 @@ def handle_client(conn, addr):
         if start_game:
             _start_game()
 
-        # -- Loop principal do jogo ---------------------------------------
+        # -- Loop principal do jogo --
         while True:
             raw = reader.recv_message(conn)
             if raw is None:
                 break
+                
+            # O cliente respondeu -> Atualiza o tempo na memória
+            with room.lock:
+                room.last_seen[player_name] = time.time()
+
             command, arg, _ = decode(raw)
+
+            # Se for só o PONG do heartbeat -> não faz mais nada com esse pacote
+            if command == CMD_PONG:
+                continue
 
             if command == CMD_FLIP:
                 _handle_flip(player_name, arg, conn)
@@ -130,8 +172,6 @@ def handle_client(conn, addr):
 
     except Exception as e:
         print(f"[SERVER] Erro com {addr}: {e}")
-        import traceback
-        traceback.print_exc()
     finally:
         if player_name:
             print(f"[SERVER] '{player_name}' desconectou.")
@@ -146,49 +186,41 @@ def handle_client(conn, addr):
                         }))
                     except Exception:
                         pass
-                    # Nao fecha a conexao do outro jogador aqui —
-                    # ele precisa processar GAME_OVER e sair normalmente.
                 room.players = []
         conn.close()
 
 
 def _start_game():
-    """Monta o tabuleiro e notifica ambos os jogadores."""
     room.build_board()
     names = [p["name"] for p in room.players]
     payload = {
         "board_size": BOARD_SIZE,
-        "players":    names,
-        "hidden":     ["?" for _ in room.board],
+        "players": names,
+        "hidden": ["?" for _ in room.board],
     }
     room.broadcast(encode(CMD_GAME_START, "", payload))
     print(f"[SERVER] Jogo iniciado! Jogadores: {names}")
     _notify_turn()
 
-
+# Notifica o jogador atual e o outro jogador sobre quem deve jogar
 def _notify_turn():
-    """Avisa de quem e o turno."""
     current = room.players[room.current_turn]
-    other   = room.other_player(current["name"])
+    other = room.other_player(current["name"])
     current["conn"].sendall(encode(CMD_YOUR_TURN))
     if other:
         other["conn"].sendall(encode(CMD_WAIT_TURN, current["name"]))
     print(f"[SERVER] Vez de '{current['name']}'")
 
-
+# Lógica de FLIP: valida jogada -> atualiza estado -> faz broadcast -> verifica fim de jogo
 def _handle_flip(player_name: str, arg: str, conn):
-    """Processa o comando FLIP de um jogador."""
     with room.lock:
-        # Verifica se o jogo ainda tem 2 jogadores
         if len(room.players) < 2 or room.current_turn >= len(room.players):
             conn.sendall(encode(CMD_ERR, "GAME_OVER"))
             return
-        # Valida turno
         if room.players[room.current_turn]["name"] != player_name:
             conn.sendall(encode(CMD_ERR, ERR_NOT_YOUR_TURN))
             return
 
-        # Valida posicao
         try:
             pos = int(arg)
             assert 0 <= pos < BOARD_SIZE
@@ -196,31 +228,26 @@ def _handle_flip(player_name: str, arg: str, conn):
             conn.sendall(encode(CMD_ERR, ERR_INVALID_POS))
             return
 
-        # Valida se carta ja foi revelada permanentemente
         if room.revealed[pos]:
             conn.sendall(encode(CMD_ERR, ERR_ALREADY_OPEN))
             return
 
         symbol = room.board[pos]
 
-        # Broadcast: carta revelada
         room.broadcast(encode(CMD_CARD_REVEALED, "", {
-            "pos":    pos,
+            "pos": pos,
             "symbol": symbol,
             "player": player_name,
         }))
 
-        # Primeira carta do turno
         if room.first_flip is None:
             room.first_flip = (pos, symbol)
             return
 
-        # Segunda carta do turno
         first_pos, first_symbol = room.first_flip
         room.first_flip = None
 
         if first_symbol == symbol:
-            # -- PAR ENCONTRADO -------------------------------------------
             room.revealed[first_pos] = True
             room.revealed[pos]       = True
 
@@ -240,28 +267,24 @@ def _handle_flip(player_name: str, arg: str, conn):
                 _end_game()
                 return
         else:
-            # -- SEM PAR --------------------------------------------------
             room.broadcast(encode(CMD_NO_MATCH, "", {
                 "positions": [first_pos, pos],
                 "player":    player_name,
             }))
-            # Passa o turno
             room.current_turn = 1 - room.current_turn
 
     _notify_turn()
 
-
+# Fim de jogo: calcula vencedor, envia GAME_OVER e imprime resultado no console
 def _end_game():
-    """Determina vencedor e encerra a partida."""
-    scores  = {p["name"]: p["score"] for p in room.players}
-    s       = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    winner  = s[0][0] if s[0][1] != s[1][1] else "EMPATE"
+    scores = {p["name"]: p["score"] for p in room.players}
+    s = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    winner = s[0][0] if s[0][1] != s[1][1] else "EMPATE"
     room.broadcast(encode(CMD_GAME_OVER, "", {
         "scores": scores,
         "winner": winner,
     }))
     print(f"[SERVER] Fim de jogo! Vencedor: {winner} | Placar: {scores}")
-
 
 def main():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -269,6 +292,10 @@ def main():
     srv.bind((HOST, PORT))
     srv.listen(2)
     print(f"[SERVER] MGAME/1.0 aguardando jogadores em {HOST}:{PORT}...")
+
+    # Inicia a thread que monitora inatividade
+    t_monitor = threading.Thread(target=monitor_heartbeats, daemon=True)
+    t_monitor.start()
 
     while True:
         try:
