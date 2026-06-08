@@ -12,6 +12,7 @@ DELIMITER = "\r\n"
 CMD_JOIN = "JOIN"
 CMD_FLIP = "FLIP"
 CMD_QUIT = "QUIT"
+CMD_PONG = "PONG"  # Resposta ao Heartbeat
 
 # Servidor -> Cliente
 CMD_OK             = "OK"
@@ -26,6 +27,7 @@ CMD_SCORE_UPDATE   = "SCORE_UPDATE"
 CMD_GAME_OVER      = "GAME_OVER"
 CMD_PLAYER_LEFT    = "PLAYER_LEFT"
 CMD_BYE            = "BYE"
+CMD_PING           = "PING"  # Verificação de conectividade (Heartbeat)
 
 # Args de OK
 ARG_WAITING    = "WAITING"
@@ -75,12 +77,7 @@ COMMANDS_WITH_PAYLOAD = {
 
 
 class ProtocolReader:
-    """Leitor de mensagens com buffer persistente por conexao.
-
-    Garante que mensagens sejam extraidas uma por vez, mesmo quando
-    multiplas mensagens chegam em unico recv(). O buffer interno
-    preserva dados nao consumidos entre chamadas.
-    """
+    """Leitor de mensagens com buffer persistente por conexao."""
 
     def __init__(self):
         self._buffer = ""
@@ -106,10 +103,7 @@ class ProtocolReader:
                 return None
 
     def _extract_one(self):
-        """Tenta extrair exatamente 1 mensagem do buffer interno.
-
-        Retorna (mensagem, restante) ou (None, buffer_original).
-        """
+        """Tenta extrair exatamente 1 mensagem do buffer interno."""
         first = self._buffer.find(DELIMITER)
         if first == -1:
             return None, self._buffer
@@ -130,8 +124,6 @@ class ProtocolReader:
             return self._buffer[:first + 2], self._buffer[first + 2:]
 
 
-# Funcao legada — mantida para compatibilidade com testes existentes.
-# Novos codigos devem usar ProtocolReader.
 _recv_buffers = {}
 
 def recv_message(sock):

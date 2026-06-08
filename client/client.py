@@ -18,6 +18,7 @@ from shared.protocol import (
     CMD_CARD_REVEALED, CMD_MATCH, CMD_NO_MATCH,
     CMD_SCORE_UPDATE, CMD_GAME_OVER,
     CMD_PLAYER_LEFT, CMD_BYE,
+    CMD_PING, CMD_PONG, # NOVAS CONSTANTES
 )
 
 HOST = "127.0.0.1"
@@ -29,10 +30,9 @@ scores       = {}
 my_turn      = False
 game_over    = False
 my_name      = ""
-my_matches   = []  # (symbol, [pos1, pos2]) para cada par que este jogador encontrou
+my_matches   = []  
 board_lock   = threading.Lock()
 
-# Fila de entrada: thread do input coloca, main consome
 input_queue = queue.Queue()
 
 
@@ -42,15 +42,14 @@ def _clear():
 
 # Cores ANSI
 R   = "\033[0m"
-VR  = "\033[92m"  # verde
-VM  = "\033[91m"  # vermelho
-AM  = "\033[93m"  # amarelo
-AZ  = "\033[94m"  # azul
-MG  = "\033[95m"  # magenta
-CI  = "\033[96m"  # ciano
-BR  = "\033[1m"   # bold
+VR  = "\033[92m"
+VM  = "\033[91m"
+AM  = "\033[93m"
+AZ  = "\033[94m"
+MG  = "\033[95m"
+CI  = "\033[96m"
+BR  = "\033[1m"
 
-# Cor para cada simbolo de carta
 CORES_CARTAS = {
     "A": "\033[91m", "B": "\033[92m", "C": "\033[93m",
     "D": "\033[94m", "E": "\033[95m", "F": "\033[96m",
@@ -69,7 +68,6 @@ def render_board():
         )
         print(placar)
 
-    # Contador de pares restantes
     revealed_count = sum(1 for r in revealed if r)
     pairs_left = 8 - revealed_count // 2
     if pairs_left > 0:
@@ -99,7 +97,6 @@ def render_board():
     print()
 
 def render_status(msg: str):
-    # Colore a mensagem baseada no conteudo
     if "PAR!" in msg or "Vencedor" in msg:
         msg = f"{VR}{msg}{R}"
     elif "erro" in msg or "Erro" in msg or "ERRO" in msg:
@@ -110,7 +107,6 @@ def render_status(msg: str):
     print()
 
 def input_listener():
-    """Thread que le linhas do stdin e coloca na fila."""
     while not game_over:
         try:
             line = sys.stdin.readline()
@@ -121,10 +117,9 @@ def input_listener():
 
 
 def receiver(sock):
-    """Thread que recebe mensagens do servidor, atualiza estado E mostra prompt."""
     global my_turn, game_over, my_matches
     reader = ProtocolReader()
-    receiver_flips = 0  # quantas cartas este jogador virou no turno atual
+    receiver_flips = 0
 
     while True:
         raw = reader.recv_message(sock)
@@ -134,8 +129,15 @@ def receiver(sock):
 
         command, arg, payload = decode(raw)
 
-        with board_lock:
+        # Trata o Heartbeat silenciosamente
+        if command == CMD_PING:
+            try:
+                sock.sendall(encode(CMD_PONG))
+            except OSError:
+                pass
+            continue
 
+        with board_lock:
             if command == CMD_OK and arg == "WAITING":
                 render_board()
                 render_status("Conectado! Aguardando segundo jogador...")
@@ -214,18 +216,15 @@ def receiver(sock):
                 winner       = payload.get("winner", "?")
                 scores.update(final_scores)
 
-                # Fase 1: revela tabuleiro completo por 3.0s
                 render_board()
                 render_status("Fim de jogo! Revelando todas as cartas...")
                 time.sleep(3.0)
 
-                # Fase 2: tela final com resumo das cartas
                 render_board()
                 print("=" * 42)
                 print("         FIM DE JOGO!")
                 print("=" * 42)
 
-                # Resumo das cartas que ESTE jogador encontrou
                 if my_matches:
                     print(f"\n  {my_name}, suas cartas encontradas:")
                     for symbol, poss in my_matches:
@@ -280,17 +279,11 @@ def main():
     print(f"[CLIENTE] Conectado como '{my_name}'")
     sock.sendall(encode(CMD_JOIN, my_name))
 
-    # Inicia receptor em thread separada
     t = threading.Thread(target=receiver, args=(sock,), daemon=True)
     t.start()
 
-    # Inicia listener de input em thread separada
     inp = threading.Thread(target=input_listener, daemon=True)
     inp.start()
-
-    # Loop principal: SOMENTE le input e envia comandos
-    # Toda a saida (tabuleiro, status, prompts) fica na thread receiver
-    # O proprio receiver controla my_turn via contagem de CARD_REVEALED
 
     try:
         while not game_over:
