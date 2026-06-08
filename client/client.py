@@ -68,6 +68,15 @@ def render_board():
             f"{BR}{n}{R}: {VR}{s}{R} pts" for n, s in scores.items()
         )
         print(placar)
+
+    # Contador de pares restantes
+    revealed_count = sum(1 for r in revealed if r)
+    pairs_left = 8 - revealed_count // 2
+    if pairs_left > 0:
+        print(f"{AM}  Pares restantes: {pairs_left}{R}")
+    else:
+        print(f"{VR}  Todos os pares encontrados!{R}")
+
     print()
 
     print(f"     {AZ}0{R}    {AZ}1{R}    {AZ}2{R}    {AZ}3{R}")
