@@ -77,26 +77,35 @@ def monitor_heartbeats():
 
         stale_connections = []
         with room.lock:
+            # Só monitora heartbeat durante jogo ativo.
+            # Enquanto aguarda 2o jogador, não desconecta por inatividade.
+            if not room.started:
+                continue
+
             for p in list(room.players):
                 name = p["name"]
                 conn = p["conn"]
                 last = room.last_seen.get(name, now)
 
-                if now - last > 10:
+                if now - last > 30:
                     print(f"[SERVER] Timeout! Desconectando '{name}' por inatividade.")
-                    stale_connections.append((name, conn))
+                    stale_connections.append(p)
                 else:
                     try:
                         conn.sendall(encode(CMD_PING))
                     except Exception:
                         pass
 
-        # Fecha conexões FORA do lock para evitar deadlock com handle_client
-        for name, conn in stale_connections:
+        # Fecha conexões FORA do lock e remove jogadores da sala
+        for p in stale_connections:
             try:
-                conn.close()
+                p["conn"].close()
             except Exception:
                 pass
+            with room.lock:
+                if p in room.players:
+                    room.players.remove(p)
+                    room.last_seen.pop(p["name"], None)
 
 
 def handle_client(conn, addr):
@@ -134,6 +143,10 @@ def handle_client(conn, addr):
         conn.sendall(encode(CMD_OK, ARG_WAITING))
 
         # -- Aguarda 2o jogador --
+        # Enquanto espera, le o socket com timeout para processar PONG do heartbeat
+        # Mensagens que nao sao PONG (ex: GAME_START) sao guardadas e repostas depois
+        conn.settimeout(0.5)
+        pre_game = []  # buffer de mensagens recebidas durante a espera
         while True:
             with room.lock:
                 if len(room.players) == 2 and not room.started:
@@ -143,7 +156,23 @@ def handle_client(conn, addr):
                 elif room.started:
                     start_game = False
                     break
-            threading.Event().wait(0.2)
+            try:
+                raw = reader.recv_message(conn)
+                if raw is None:
+                    return  # conexao morreu, finally cuida da limpeza
+                cmd, _, _ = decode(raw)
+                if cmd == CMD_PONG:
+                    with room.lock:
+                        room.last_seen[player_name] = time.time()
+                else:
+                    # Guarda para processar no loop principal (ex: GAME_START)
+                    pre_game.append(raw)
+            except socket.timeout:
+                continue
+        conn.settimeout(None)
+        # Repoe mensagens recebidas durante a espera no buffer do reader
+        if pre_game:
+            reader._buffer = "".join(pre_game) + reader._buffer
 
         if start_game:
             _start_game()
@@ -189,6 +218,7 @@ def handle_client(conn, addr):
                     except Exception:
                         pass
                 room.players = []
+                room.last_seen.pop(player_name, None)
         conn.close()
 
 
@@ -208,9 +238,19 @@ def _start_game():
 def _notify_turn():
     current = room.players[room.current_turn]
     other = room.other_player(current["name"])
-    current["conn"].sendall(encode(CMD_YOUR_TURN))
+    try:
+        current["conn"].sendall(encode(CMD_YOUR_TURN))
+    except Exception:
+        # Jogador atual desconectou — passa a vez ou encerra
+        if other:
+            other["conn"].sendall(encode(CMD_YOUR_TURN))
+            room.current_turn = 1 - room.current_turn
+        return
     if other:
-        other["conn"].sendall(encode(CMD_WAIT_TURN, current["name"]))
+        try:
+            other["conn"].sendall(encode(CMD_WAIT_TURN, current["name"]))
+        except Exception:
+            pass
     print(f"[SERVER] Vez de '{current['name']}'")
 
 # Lógica de FLIP: valida jogada -> atualiza estado -> faz broadcast -> verifica fim de jogo
