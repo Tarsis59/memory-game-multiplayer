@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .env
 venv/
+run-deepseek.bat
+start-deepseek-claude.ps1

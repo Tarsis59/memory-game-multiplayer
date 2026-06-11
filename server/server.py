@@ -74,27 +74,29 @@ def monitor_heartbeats():
     while True:
         time.sleep(10) # Avalia a cada 10 segundos
         now = time.time()
-        
+
+        stale_connections = []
         with room.lock:
-            # list() cria uma cópia rápida para iterar em segurança
             for p in list(room.players):
                 name = p["name"]
                 conn = p["conn"]
                 last = room.last_seen.get(name, now)
-                
-                # Se não recebe dados (ou PONG) há 10 segundos, caiu
+
                 if now - last > 10:
                     print(f"[SERVER] Timeout! Desconectando '{name}' por inatividade.")
-                    try:
-                        conn.close() # Força o recv_message do handle_client a falhar e limpar a sala
-                    except Exception:
-                        pass
+                    stale_connections.append((name, conn))
                 else:
-                    # Envia PING para provocar uma resposta e manter o timer fresco
                     try:
                         conn.sendall(encode(CMD_PING))
                     except Exception:
                         pass
+
+        # Fecha conexões FORA do lock para evitar deadlock com handle_client
+        for name, conn in stale_connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def handle_client(conn, addr):
@@ -213,6 +215,7 @@ def _notify_turn():
 
 # Lógica de FLIP: valida jogada -> atualiza estado -> faz broadcast -> verifica fim de jogo
 def _handle_flip(player_name: str, arg: str, conn):
+    game_ended = False
     with room.lock:
         if len(room.players) < 2 or room.current_turn >= len(room.players):
             conn.sendall(encode(CMD_ERR, "GAME_OVER"))
@@ -264,8 +267,7 @@ def _handle_flip(player_name: str, arg: str, conn):
             room.broadcast(encode(CMD_SCORE_UPDATE, "", {"scores": scores}))
 
             if room.all_revealed():
-                _end_game()
-                return
+                game_ended = True
         else:
             room.broadcast(encode(CMD_NO_MATCH, "", {
                 "positions": [first_pos, pos],
@@ -273,6 +275,9 @@ def _handle_flip(player_name: str, arg: str, conn):
             }))
             room.current_turn = 1 - room.current_turn
 
+    if game_ended:
+        _end_game()
+        return
     _notify_turn()
 
 # Fim de jogo: calcula vencedor, envia GAME_OVER e imprime resultado no console
