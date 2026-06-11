@@ -41,6 +41,13 @@ escolha correta para esta aplicacao.
 - Rede TCP/IP funcional (funciona em localhost ou rede local)
 - 3 terminais: 1 servidor + 2 clientes
 
+**Nota para Windows:** Se desejar a interface grafica no terminal
+(com setas e cores), instale o pacote opcional:
+```bash
+pip install windows-curses
+```
+Sem ele, o cliente funciona normalmente no modo fallback (console).
+
 ---
 
 ## Como Executar
@@ -77,10 +84,19 @@ cd memory-game
 python client/client.py Bob
 ```
 
+Para conectar em um servidor remoto, informe o IP como segundo argumento:
+```bash
+python client/client.py Alice 192.168.1.100
+```
+
 ### 5. Jogando
 
-Quando for sua vez, voce vera `SUA VEZ! Digite a posicao (0-15):`.
-Digite o numero da posicao e pressione Enter.
+**Interface curses (Linux/Mac ou Windows com windows-curses):**
+Use as **setas** para navegar pelo tabuleiro e **ENTER** ou **ESPACO**
+para virar a carta. Pressione **Q** para sair.
+
+**Interface console (Windows sem curses):**
+Digite o numero da posicao (0-15) e pressione Enter quando for sua vez.
 
 ```
      0    1    2    3
@@ -109,6 +125,19 @@ python tests/run_demo.py
 
 ---
 
+## Heartbeat (PING / PONG)
+
+O servidor monitora a conectividade dos jogadores a cada 10 segundos.
+Conexões inativas por mais de 10 segundos sao automaticamente
+fechadas, garantindo que uma queda de rede nao trave a partida.
+
+| Mensagem | Direcao | Descricao |
+|---|---|---|
+| `PING` | S->C | Verificacao de conectividade |
+| `PONG` | C->S | Resposta ao heartbeat |
+
+---
+
 ## Protocolo MGAME/1.0
 
 ### Formato das Mensagens
@@ -118,7 +147,7 @@ COMANDO ARGUMENTO\r\n
 [JSON_PAYLOAD]\r\n   <- presente apenas quando ha dados estruturados
 ```
 
-### Tabela de Mensagens
+### Tabela de Mensagens (20 mensagens)
 
 | Mensagem | Direcao | Descricao |
 |---|---|---|
@@ -140,6 +169,8 @@ COMANDO ARGUMENTO\r\n
 | `QUIT` | C->S | Abandona a partida |
 | `PLAYER_LEFT <nome>` | S->C | Adversario saiu |
 | `BYE` | S->C | Confirmacao de saida |
+| `PING` | S->C | Heartbeat: verificacao de conectividade |
+| `PONG` | C->S | Heartbeat: resposta ao PING |
 
 ### Diagrama de Estados — Servidor
 
@@ -274,14 +305,15 @@ Servidor -> todos:  GAME_OVER {"scores":{"Alice":5,"Bob":3},"winner":"Alice"}\r\
 ```
 memory-game/
 +-- shared/
-|   +-- protocol.py      # Protocolo MGAME/1.0 (encode/decode/recv)
+|   +-- protocol.py      # Protocolo MGAME/1.0 (encode/decode/recv + ProtocolReader)
 +-- server/
-|   +-- server.py        # Servidor arbitro multi-thread
+|   +-- server.py        # Servidor arbitro multi-thread com heartbeat
 +-- client/
-|   +-- client.py        # Cliente (rodar 2x = 2 jogadores)
+|   +-- client.py        # Cliente (curses no Linux/Mac, console no Windows)
 +-- tests/
 |   +-- test_protocol.py # Testes unitarios do protocolo
-|   +-- run_demo.py      # Demo automatica
+|   +-- test_full_game.py# Teste de integracao (2 FLIPs de Alice)
+|   +-- run_demo.py      # Demo automatica server + 2 clients
 +-- README.md
 +-- requirements.txt
 +-- .gitignore

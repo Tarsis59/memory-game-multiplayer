@@ -31,7 +31,6 @@ CMD_PING           = "PING"  # Verificação de conectividade (Heartbeat)
 
 # Args de OK
 ARG_WAITING    = "WAITING"
-ARG_REGISTERED = "REGISTERED"
 
 # Args de ERR
 ERR_NAME_TAKEN    = "NAME_TAKEN"
