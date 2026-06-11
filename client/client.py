@@ -42,13 +42,15 @@ except ImportError:
 # PARTE 1 — LOGICA COMUM (receiver)
 # =============================================================================
 
-status_msg   = ""
-status_color = "info"
+status_msg    = ""
+status_color  = "info"
+_needs_redraw = True
 
 def set_status(msg, stype="info"):
-    global status_msg, status_color
+    global status_msg, status_color, _needs_redraw
     status_msg = msg
     status_color = stype
+    _needs_redraw = True
 
 
 def receiver(sock):
@@ -342,6 +344,8 @@ else:
         elif "SUA VEZ" in msg:
             msg = f"{AM}{msg}{R}"
         print(f"  >> {msg}")
+        if my_turn:
+            print(f"\n  {AM}Digite a posicao (0-15) e pressione Enter:{R} ", end="", flush=True)
         print()
 
     def _input_listener():
@@ -354,7 +358,7 @@ else:
                 break
 
     def _console_main(sock):
-        global my_turn, game_over
+        global my_turn, game_over, _needs_redraw
         t = threading.Thread(target=receiver, args=(sock,), daemon=True)
         t.start()
         inp = threading.Thread(target=_input_listener, daemon=True)
@@ -362,6 +366,9 @@ else:
 
         try:
             while not game_over:
+                if _needs_redraw:
+                    _console_render()
+                    _needs_redraw = False
                 if my_turn:
                     try:
                         entry = input_queue.get(timeout=0.1)
@@ -377,15 +384,19 @@ else:
                         if 0 <= pos <= 15:
                             with board_lock:
                                 if revealed[pos]:
-                                    print("  Carta ja revelada! Escolha outra posicao.")
+                                    print("\n  Carta ja revelada! Escolha outra posicao.")
+                                    _needs_redraw = True
                                     continue
                             sock.sendall(encode(CMD_FLIP, str(pos)))
+                            _needs_redraw = True
                         else:
-                            print("  Posicao invalida. Digite entre 0 e 15.")
+                            print("\n  Posicao invalida. Digite entre 0 e 15.")
+                            _needs_redraw = True
                     except ValueError:
-                        print("  Digite um numero de 0 a 15.")
+                        print("\n  Digite um numero de 0 a 15.")
+                        _needs_redraw = True
                 else:
-                    time.sleep(0.05)
+                    time.sleep(0.1)
         except KeyboardInterrupt:
             sock.sendall(encode(CMD_QUIT))
         finally:
