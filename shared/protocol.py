@@ -12,7 +12,8 @@ DELIMITER = "\r\n"
 CMD_JOIN = "JOIN"
 CMD_FLIP = "FLIP"
 CMD_QUIT = "QUIT"
-CMD_PONG = "PONG"  # Resposta ao Heartbeat
+CMD_PONG = "PONG"
+CMD_CHAT = "CHAT" 
 
 # Servidor -> Cliente
 CMD_OK             = "OK"
@@ -27,7 +28,8 @@ CMD_SCORE_UPDATE   = "SCORE_UPDATE"
 CMD_GAME_OVER      = "GAME_OVER"
 CMD_PLAYER_LEFT    = "PLAYER_LEFT"
 CMD_BYE            = "BYE"
-CMD_PING           = "PING"  # Verificação de conectividade (Heartbeat)
+CMD_PING           = "PING"
+CMD_CHAT_MSG       = "CHAT_MSG" # Novo comando de recebimento de chat
 
 # Args de OK
 ARG_WAITING    = "WAITING"
@@ -68,10 +70,9 @@ def decode(raw: str):
 
     return command, arg, payload
 
-
 COMMANDS_WITH_PAYLOAD = {
     CMD_GAME_START, CMD_CARD_REVEALED, CMD_MATCH,
-    CMD_NO_MATCH, CMD_SCORE_UPDATE, CMD_GAME_OVER,
+    CMD_NO_MATCH, CMD_SCORE_UPDATE, CMD_GAME_OVER, CMD_CHAT_MSG
 }
 
 
@@ -84,13 +85,11 @@ class ProtocolReader:
     def recv_message(self, sock):
         """Le uma mensagem completa do socket. Retorna str ou None."""
         while True:
-            # Tenta extrair uma mensagem do buffer atual
             msg, restante = self._extract_one()
             if msg is not None:
                 self._buffer = restante
                 return msg
 
-            # Precisa de mais dados
             try:
                 chunk = sock.recv(4096).decode(ENCODING)
                 if not chunk:
@@ -111,7 +110,6 @@ class ProtocolReader:
         cmd = header_line.split(" ", 1)[0]
 
         if cmd in COMMANDS_WITH_PAYLOAD:
-            # Precisa de 2o \r\n (payload JSON)
             rest = self._buffer[first + 2:]
             second = rest.find(DELIMITER)
             if second == -1:
@@ -119,14 +117,12 @@ class ProtocolReader:
             end = first + 2 + second + 2
             return self._buffer[:end], self._buffer[end:]
         else:
-            # So o cabecalho (1 \r\n)
             return self._buffer[:first + 2], self._buffer[first + 2:]
 
 
 _recv_buffers = {}
 
 def recv_message(sock):
-    """Le do socket ate receber mensagem completa. Retorna str ou None."""
     fd = sock.fileno()
     buffer = _recv_buffers.pop(fd, "")
     reader = ProtocolReader()

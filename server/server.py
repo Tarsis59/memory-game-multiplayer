@@ -2,7 +2,7 @@
 Servidor arbitro do Jogo da Memoria Multiplayer - MGAME/1.0
 - Aguarda exatamente 2 jogadores
 - Controla tabuleiro, turnos, pontuacao e vitoria
-- Faz broadcast de eventos para ambos os clientes
+- Faz broadcast de eventos e CHAT para ambos os clientes
 - Possui controle de inatividade (Heartbeat)
 """
 import socket
@@ -22,6 +22,7 @@ from shared.protocol import (
     CMD_SCORE_UPDATE, CMD_GAME_OVER,
     CMD_PLAYER_LEFT, CMD_BYE,
     CMD_PING, CMD_PONG,
+    CMD_CHAT, CMD_CHAT_MSG,
     ARG_WAITING,
     ERR_NAME_TAKEN, ERR_NOT_YOUR_TURN,
     ERR_INVALID_POS, ERR_ALREADY_OPEN,
@@ -31,10 +32,8 @@ HOST = "0.0.0.0"
 PORT = 9000
 BOARD_SIZE = 16
 
-
 class GameRoom:
     """Gerencia o estado completo de uma partida."""
-
     def __init__(self):
         self.players = []
         self.board = []
@@ -43,7 +42,7 @@ class GameRoom:
         self.first_flip = None
         self.lock = threading.Lock()
         self.started = False
-        self.last_seen = {}  # Armazena o timestamp de cada jogador
+        self.last_seen = {}
 
     def build_board(self):
         symbols = list("ABCDEFGH") * 2
@@ -70,23 +69,17 @@ class GameRoom:
 room = GameRoom()
 
 def monitor_heartbeats():
-    # Verificar se as conexões estão ativas
     while True:
-        time.sleep(10) # Avalia a cada 10 segundos
+        time.sleep(10)
         now = time.time()
-
         stale_connections = []
         with room.lock:
-            # Só monitora heartbeat durante jogo ativo.
-            # Enquanto aguarda 2o jogador, não desconecta por inatividade.
             if not room.started:
                 continue
-
             for p in list(room.players):
                 name = p["name"]
                 conn = p["conn"]
                 last = room.last_seen.get(name, now)
-
                 if now - last > 30:
                     print(f"[SERVER] Timeout! Desconectando '{name}' por inatividade.")
                     stale_connections.append(p)
@@ -96,7 +89,6 @@ def monitor_heartbeats():
                     except Exception:
                         pass
 
-        # Fecha conexões FORA do lock e remove jogadores da sala
         for p in stale_connections:
             try:
                 p["conn"].close()
@@ -113,10 +105,8 @@ def handle_client(conn, addr):
     reader = ProtocolReader()
 
     try:
-        # -- JOIN --
         raw = reader.recv_message(conn)
-        if raw is None:
-            return
+        if raw is None: return
         command, arg, _ = decode(raw)
 
         if command != CMD_JOIN or not arg.strip():
@@ -134,19 +124,14 @@ def handle_client(conn, addr):
                     conn.sendall(encode(CMD_ERR, ERR_NAME_TAKEN))
                     return
             room.players.append({"name": player_name, "conn": conn, "score": 0})
-            
-            # Inicializa o heartbeat do jogador
             room.last_seen[player_name] = time.time()
             player_count = len(room.players)
 
         print(f"[SERVER] '{player_name}' entrou ({player_count}/2)")
         conn.sendall(encode(CMD_OK, ARG_WAITING))
 
-        # -- Aguarda 2o jogador --
-        # Enquanto espera, le o socket com timeout para processar PONG do heartbeat
-        # Mensagens que nao sao PONG (ex: GAME_START) sao guardadas e repostas depois
         conn.settimeout(0.5)
-        pre_game = []  # buffer de mensagens recebidas durante a espera
+        pre_game = []
         while True:
             with room.lock:
                 if len(room.players) == 2 and not room.started:
@@ -158,19 +143,16 @@ def handle_client(conn, addr):
                     break
             try:
                 raw = reader.recv_message(conn)
-                if raw is None:
-                    return  # conexao morreu, finally cuida da limpeza
+                if raw is None: return
                 cmd, _, _ = decode(raw)
                 if cmd == CMD_PONG:
                     with room.lock:
                         room.last_seen[player_name] = time.time()
                 else:
-                    # Guarda para processar no loop principal (ex: GAME_START)
                     pre_game.append(raw)
             except socket.timeout:
                 continue
         conn.settimeout(None)
-        # Repoe mensagens recebidas durante a espera no buffer do reader
         if pre_game:
             reader._buffer = "".join(pre_game) + reader._buffer
 
@@ -180,20 +162,26 @@ def handle_client(conn, addr):
         # -- Loop principal do jogo --
         while True:
             raw = reader.recv_message(conn)
-            if raw is None:
-                break
+            if raw is None: break
                 
-            # O cliente respondeu -> Atualiza o tempo na memória
             with room.lock:
                 room.last_seen[player_name] = time.time()
 
             command, arg, _ = decode(raw)
 
-            # Se for só o PONG do heartbeat -> não faz mais nada com esse pacote
             if command == CMD_PONG:
                 continue
+            
+            # Repassa a mensagem de CHAT para a sala imediatamente
+            elif command == CMD_CHAT:
+                msg_text = arg.strip()
+                if msg_text:
+                    room.broadcast(encode(CMD_CHAT_MSG, "", {
+                        "player": player_name,
+                        "msg": msg_text
+                    }))
 
-            if command == CMD_FLIP:
+            elif command == CMD_FLIP:
                 _handle_flip(player_name, arg, conn)
             elif command == CMD_QUIT:
                 conn.sendall(encode(CMD_BYE))
@@ -221,7 +209,6 @@ def handle_client(conn, addr):
                 room.last_seen.pop(player_name, None)
         conn.close()
 
-
 def _start_game():
     room.build_board()
     names = [p["name"] for p in room.players]
@@ -234,14 +221,12 @@ def _start_game():
     print(f"[SERVER] Jogo iniciado! Jogadores: {names}")
     _notify_turn()
 
-# Notifica o jogador atual e o outro jogador sobre quem deve jogar
 def _notify_turn():
     current = room.players[room.current_turn]
     other = room.other_player(current["name"])
     try:
         current["conn"].sendall(encode(CMD_YOUR_TURN))
     except Exception:
-        # Jogador atual desconectou — passa a vez ou encerra
         if other:
             other["conn"].sendall(encode(CMD_YOUR_TURN))
             room.current_turn = 1 - room.current_turn
@@ -253,7 +238,6 @@ def _notify_turn():
             pass
     print(f"[SERVER] Vez de '{current['name']}'")
 
-# Lógica de FLIP: valida jogada -> atualiza estado -> faz broadcast -> verifica fim de jogo
 def _handle_flip(player_name: str, arg: str, conn):
     game_ended = False
     with room.lock:
@@ -320,7 +304,6 @@ def _handle_flip(player_name: str, arg: str, conn):
         return
     _notify_turn()
 
-# Fim de jogo: calcula vencedor, envia GAME_OVER e imprime resultado no console
 def _end_game():
     scores = {p["name"]: p["score"] for p in room.players}
     s = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -338,7 +321,6 @@ def main():
     srv.listen(2)
     print(f"[SERVER] MGAME/1.0 aguardando jogadores em {HOST}:{PORT}...")
 
-    # Inicia a thread que monitora inatividade
     t_monitor = threading.Thread(target=monitor_heartbeats, daemon=True)
     t_monitor.start()
 
@@ -353,7 +335,6 @@ def main():
             break
 
     srv.close()
-
 
 if __name__ == "__main__":
     main()

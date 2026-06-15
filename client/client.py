@@ -1,6 +1,6 @@
 """
 Cliente do Jogo da Memoria Multiplayer - MGAME/1.0
-Possui duas interfaces: curses (Linux/Mac) e console (Windows/fallback).
+Possui interface curses com Suporte a Chat Embutido!
 """
 import socket
 import threading
@@ -18,6 +18,7 @@ from shared.protocol import (
     CMD_SCORE_UPDATE, CMD_GAME_OVER,
     CMD_PLAYER_LEFT, CMD_BYE,
     CMD_PING, CMD_PONG,
+    CMD_CHAT, CMD_CHAT_MSG, 
 )
 
 PORT = 9000
@@ -30,21 +31,20 @@ my_name      = ""
 my_matches   = []
 board_lock   = threading.Lock()
 
-# -- Tenta importar curses (disponivel em Linux/Mac, precisa de pacote extra no Windows) --
 try:
     import curses
     HAS_CURSES = True
 except ImportError:
     HAS_CURSES = False
 
-
-# =============================================================================
-# PARTE 1 — LOGICA COMUM (receiver)
-# =============================================================================
-
 status_msg    = ""
 status_color  = "info"
 _needs_redraw = True
+
+# === VARIÁVEIS DO CHAT ===
+chat_history = [] 
+is_typing    = False
+chat_buffer  = ""
 
 def set_status(msg, stype="info"):
     global status_msg, status_color, _needs_redraw
@@ -52,10 +52,8 @@ def set_status(msg, stype="info"):
     status_color = stype
     _needs_redraw = True
 
-
 def receiver(sock):
-    """Thread que recebe mensagens do servidor e atualiza estado."""
-    global my_turn, game_over, my_matches
+    global my_turn, game_over, my_matches, chat_history, _needs_redraw
     reader = ProtocolReader()
     receiver_flips = 0
 
@@ -72,11 +70,18 @@ def receiver(sock):
         if command == CMD_PING:
             try:
                 sock.sendall(encode(CMD_PONG))
-            except OSError:
-                pass
+            except OSError: pass
             continue
+            
+        # -- RECEBE MENSAGEM DO CHAT --
+        if command == CMD_CHAT_MSG and payload:
+            msg_formatada = f"[{payload['player']}]: {payload['msg']}"
+            chat_history.append(msg_formatada)
+            if len(chat_history) > 3: # Mantém apenas as últimas 3 mensagens na tela
+                chat_history.pop(0)
+            _needs_redraw = True
 
-        if command == CMD_OK and arg == "WAITING":
+        elif command == CMD_OK and arg == "WAITING":
             set_status("Conectado! Aguardando segundo jogador...", "info")
 
         elif command == CMD_GAME_START and payload:
@@ -170,16 +175,11 @@ def receiver(sock):
             game_over = True
             break
 
-
-# =============================================================================
-# PARTE 2 — INTERFACE CURSES (Linux/Mac)
-# =============================================================================
-
 if HAS_CURSES:
     cursor_pos = 0
 
     def _draw_screen(stdscr):
-        global cursor_pos
+        global cursor_pos, chat_history, is_typing, chat_buffer
         stdscr.erase()
         try:
             stdscr.addstr(1, 4, "=" * 42, curses.color_pair(4))
@@ -207,8 +207,11 @@ if HAS_CURSES:
                     if sym != "?" and sym in "ABCDEFGH":
                         pair_idx = (ord(sym) - ord('A')) % 6 + 1
                         attrs = curses.color_pair(pair_idx) | curses.A_BOLD
-                    if idx == cursor_pos:
+                    
+                    # Desativa o fundo branco do cursor se a pessoa estiver digitando no chat
+                    if idx == cursor_pos and not is_typing:
                         attrs |= curses.A_REVERSE
+                        
                     stdscr.addstr(start_y + 1 + row*2, start_x + 2 + col*6, "|", curses.color_pair(4))
                     stdscr.addstr(start_y + 1 + row*2, start_x + 3 + col*6, text, attrs)
                 stdscr.addstr(start_y + 1 + row*2, start_x + 2 + 24, "|", curses.color_pair(4))
@@ -220,13 +223,27 @@ if HAS_CURSES:
             }
             c = color_map.get(status_color, curses.color_pair(7))
             stdscr.addstr(18, 4, f">> {status_msg}", c | curses.A_BOLD)
-            stdscr.addstr(20, 4, "Controles: [Setas] mover | [ENTER/ESPACO] virar | [Q] sair", curses.color_pair(7))
+            
+            # --- ÁREA DO CHAT ---
+            chat_y = 19
+            stdscr.addstr(chat_y, 4, "-"*17 + " CHAT " + "-"*17, curses.color_pair(6))
+            
+            # Histórico de mensagens
+            for i, msg in enumerate(chat_history):
+                stdscr.addstr(chat_y + 1 + i, 4, msg, curses.color_pair(7))
+            
+            # Rodapé dinâmico (Instruções do Jogo vs Input do Chat)
+            if is_typing:
+                stdscr.addstr(chat_y + 5, 4, f"[Mensagem]: {chat_buffer}_", curses.color_pair(3))
+            else:
+                stdscr.addstr(chat_y + 5, 4, "[T] Abrir Chat | [Setas] Mover | [ENTER] Virar | [Q] Sair", curses.color_pair(7))
+                
         except curses.error:
             pass
         stdscr.refresh()
 
     def _tui_loop(stdscr, sock):
-        global cursor_pos, game_over
+        global cursor_pos, game_over, is_typing, chat_buffer
         curses.curs_set(0)
         stdscr.timeout(100)
         curses.start_color()
@@ -249,46 +266,63 @@ if HAS_CURSES:
             except curses.error:
                 ch = -1
 
-            if ch in [ord('q'), ord('Q')]:
-                if not game_over:
-                    try:
-                        sock.sendall(encode(CMD_QUIT))
-                    except Exception:
-                        pass
+            if game_over and ch in [ord('q'), ord('Q')]:
                 break
+            
+            if ch == -1: continue
 
-            if game_over:
-                continue
-
-            if ch == curses.KEY_UP and cursor_pos >= 4:
-                cursor_pos -= 4
-            elif ch == curses.KEY_DOWN and cursor_pos <= 11:
-                cursor_pos += 4
-            elif ch == curses.KEY_LEFT and cursor_pos % 4 != 0:
-                cursor_pos -= 1
-            elif ch == curses.KEY_RIGHT and cursor_pos % 4 != 3:
-                cursor_pos += 1
-            elif ch in (10, 13, 32, curses.KEY_ENTER):
-                if my_turn:
-                    with board_lock:
-                        is_rev = revealed[cursor_pos]
-                    if not is_rev:
-                        try:
-                            sock.sendall(encode(CMD_FLIP, str(cursor_pos)))
-                        except Exception:
-                            pass
+            # --- ESTADO 1: USUÁRIO DIGITANDO NO CHAT ---
+            if is_typing:
+                if ch in (10, 13, curses.KEY_ENTER): # Enviou a mensagem
+                    if chat_buffer.strip():
+                        try: sock.sendall(encode(CMD_CHAT, chat_buffer.strip()))
+                        except: pass
+                    is_typing = False
+                    chat_buffer = ""
+                elif ch == 27: # Apertou ESC (Cancela o chat)
+                    is_typing = False
+                    chat_buffer = ""
+                elif ch in (8, 127, curses.KEY_BACKSPACE): # Apagou caractere
+                    chat_buffer = chat_buffer[:-1]
+                elif 32 <= ch <= 126: # Caracteres válidos normais (letras, espaços)
+                    if len(chat_buffer) < 40: # Limite visual para não quebrar a tela
+                        chat_buffer += chr(ch)
+            
+            # --- ESTADO 2: JOGANDO NORMALMENTE ---
+            else:
+                if ch in [ord('q'), ord('Q')]:
+                    if not game_over:
+                        try: sock.sendall(encode(CMD_QUIT))
+                        except Exception: pass
+                    break
+                elif ch in [ord('t'), ord('T')]: # Abre o chat
+                    is_typing = True
+                    chat_buffer = ""
+                elif ch == curses.KEY_UP and cursor_pos >= 4:
+                    cursor_pos -= 4
+                elif ch == curses.KEY_DOWN and cursor_pos <= 11:
+                    cursor_pos += 4
+                elif ch == curses.KEY_LEFT and cursor_pos % 4 != 0:
+                    cursor_pos -= 1
+                elif ch == curses.KEY_RIGHT and cursor_pos % 4 != 3:
+                    cursor_pos += 1
+                elif ch in (10, 13, 32, curses.KEY_ENTER):
+                    if my_turn:
+                        with board_lock:
+                            is_rev = revealed[cursor_pos]
+                        if not is_rev:
+                            try:
+                                sock.sendall(encode(CMD_FLIP, str(cursor_pos)))
+                            except Exception:
+                                pass
+                        else:
+                            set_status("Carta ja revelada! Escolha outra.", "error")
                     else:
-                        set_status("Carta ja revelada! Escolha outra.", "error")
-                else:
-                    set_status("Aguarde a sua vez para jogar!", "error")
+                        set_status("Aguarde a sua vez para jogar!", "error")
 
         sock.close()
 
-
-# =============================================================================
-# PARTE 3 — INTERFACE CONSOLE (Windows / fallback)
-# =============================================================================
-
+# Interface Console Fallback
 else:
     import queue
     input_queue = queue.Queue()
@@ -310,9 +344,7 @@ else:
         print(f"{AM}   JOGO DA MEMORIA MULTIPLAYER{R}")
         print(f"{CI}{'=' * 42}{R}")
         if scores:
-            placar = "  " + f"  {R}".join(
-                f"{BR}{n}{R}: {VR}{s}{R} pts" for n, s in scores.items()
-            )
+            placar = "  " + f"  {R}".join(f"{BR}{n}{R}: {VR}{s}{R} pts" for n, s in scores.items())
             print(f"{CI}  Placar ->{R}{placar}")
         revealed_count = sum(1 for r in revealed if r)
         print(f"  Pares restantes: {8 - revealed_count // 2}")
@@ -344,9 +376,18 @@ else:
         elif "SUA VEZ" in msg:
             msg = f"{AM}{msg}{R}"
         print(f"  >> {msg}")
+        
+        # Desenha o Chat Fallback
+        if chat_history:
+            print(f"  {AZ}--- Chat ---{R}")
+            for chat in chat_history:
+                print(f"  {chat}")
+            print()
+            
         if my_turn:
-            print(f"\n  {AM}Digite a posicao (0-15) e pressione Enter:{R} ", end="", flush=True)
-        print()
+            print(f"  {AM}Digite a posicao (0-15) ou /c <mensagem> para o chat:{R} ", end="", flush=True)
+        else:
+            print(f"  {AM}Aguarde sua vez, ou digite /c <mensagem> para o chat:{R} ", end="", flush=True)
 
     def _input_listener():
         while not game_over:
@@ -369,16 +410,25 @@ else:
                 if _needs_redraw:
                     _console_render()
                     _needs_redraw = False
+                    
+                try:
+                    entry = input_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                    
+                if not entry: continue
+                
+                # Trata chat via linha de comando
+                if entry.startswith("/c "):
+                    sock.sendall(encode(CMD_CHAT, entry[3:]))
+                    _needs_redraw = True
+                    continue
+                    
+                if entry.lower() in ("quit", "sair", "q"):
+                    sock.sendall(encode(CMD_QUIT))
+                    break
+                    
                 if my_turn:
-                    try:
-                        entry = input_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
-                    if not entry:
-                        continue
-                    if entry.lower() in ("quit", "sair", "q"):
-                        sock.sendall(encode(CMD_QUIT))
-                        break
                     try:
                         pos = int(entry)
                         if 0 <= pos <= 15:
@@ -393,20 +443,14 @@ else:
                             print("\n  Posicao invalida. Digite entre 0 e 15.")
                             _needs_redraw = True
                     except ValueError:
-                        print("\n  Digite um numero de 0 a 15.")
+                        print("\n  Digite um numero ou /c para chat.")
                         _needs_redraw = True
-                else:
-                    time.sleep(0.1)
         except KeyboardInterrupt:
             sock.sendall(encode(CMD_QUIT))
         finally:
             game_over = True
             sock.close()
 
-
-# =============================================================================
-# PARTE 4 — MAIN
-# =============================================================================
 
 def main():
     global my_name, my_turn, game_over
@@ -437,7 +481,6 @@ def main():
         _console_main(sock)
 
     print(f"\n[CLIENTE] Desconectado. Ate a proxima!")
-
 
 if __name__ == "__main__":
     main()

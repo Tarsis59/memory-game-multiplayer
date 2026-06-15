@@ -15,6 +15,10 @@ se forem iguais, marca ponto e joga de novo; se nao,
 as cartas voltam a ficar ocultas e o turno passa para
 o adversario. Vence quem encontrar mais pares.
 
+## Destaque Técnico:
+
+A aplicação também possui um Chat em Tempo Real embutido, o que demonstra a capacidade do protocolo construído de multiplexar eventos síncronos (turnos do jogo) e assíncronos (mensagens de texto) através do mesmo socket TCP de forma não-bloqueante.
+
 ---
 
 ## Motivacao pela Escolha do TCP
@@ -92,11 +96,14 @@ python client/client.py Alice 192.168.1.100
 ### 5. Jogando
 
 **Interface curses (Linux/Mac ou Windows com windows-curses):**
-Use as **setas** para navegar pelo tabuleiro e **ENTER** ou **ESPACO**
-para virar a carta. Pressione **Q** para sair.
+* Use as **setas** para navegar pelo tabuleiro.
+* Pressione **ENTER** ou **ESPACO** para virar a carta.
+* Pressione **T** para abrir o modo Chat, digite sua mensagem e aperte ENTER para enviar.
+* Pressione **Q** para sair.
 
-**Interface console (Windows sem curses):**
-Digite o numero da posicao (0-15) e pressione Enter quando for sua vez.
+**Interface console (Windows sem fallback):**
+* Digite o numero da posicao (0-15) e pressione Enter quando for sua vez.
+* Para usar o chat a qualquer momento, digite `/c sua mensagem aqui` e pressione Enter.
 
 ```
      0    1    2    3
@@ -171,6 +178,8 @@ COMANDO ARGUMENTO\r\n
 | `BYE` | S->C | Confirmacao de saida |
 | `PING` | S->C | Heartbeat: verificacao de conectividade |
 | `PONG` | C->S | Heartbeat: resposta ao PING |
+| `CHAT <msg>` | C->S | Jogador envia uma mensagem de texto no chat |
+| `CHAT_MSG` + JSON | S->C | Broadcast da mensagem de chat (autor e texto) para a sala |
 
 ### Diagrama de Estados — Servidor
 
