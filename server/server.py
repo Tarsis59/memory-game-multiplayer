@@ -4,6 +4,7 @@ Servidor arbitro do Jogo da Memoria Multiplayer - MGAME/1.0
 - Controla tabuleiro, turnos, pontuacao e vitoria
 - Faz broadcast de eventos e CHAT para ambos os clientes
 - Possui controle de inatividade (Heartbeat)
+- Suporta conexões IPv4 e IPv6 simultaneamente (Dual-Stack)
 """
 import socket
 import threading
@@ -28,7 +29,7 @@ from shared.protocol import (
     ERR_INVALID_POS, ERR_ALREADY_OPEN,
 )
 
-HOST = "0.0.0.0"
+HOST = "" # String vazia permite bind em todas as interfaces IPv4 e IPv6
 PORT = 9000
 BOARD_SIZE = 16
 
@@ -80,7 +81,7 @@ def monitor_heartbeats():
                 name = p["name"]
                 conn = p["conn"]
                 last = room.last_seen.get(name, now)
-                if now - last > 30:
+                if now - last > 60: 
                     print(f"[SERVER] Timeout! Desconectando '{name}' por inatividade.")
                     stale_connections.append(p)
                 else:
@@ -98,7 +99,6 @@ def monitor_heartbeats():
                 if p in room.players:
                     room.players.remove(p)
                     room.last_seen.pop(p["name"], None)
-
 
 def handle_client(conn, addr):
     player_name = None
@@ -127,7 +127,10 @@ def handle_client(conn, addr):
             room.last_seen[player_name] = time.time()
             player_count = len(room.players)
 
-        print(f"[SERVER] '{player_name}' entrou ({player_count}/2)")
+        # addr no IPv6 vem como (ip, porta, flowinfo, scopeid)
+        # pegamos apenas os dois primeiros para formatar bonito no log
+        ip_formatado = f"[{addr[0]}]:{addr[1]}" if len(addr) > 2 else f"{addr[0]}:{addr[1]}"
+        print(f"[SERVER] '{player_name}' entrou via {ip_formatado} ({player_count}/2)")
         conn.sendall(encode(CMD_OK, ARG_WAITING))
 
         conn.settimeout(0.5)
@@ -159,7 +162,6 @@ def handle_client(conn, addr):
         if start_game:
             _start_game()
 
-        # -- Loop principal do jogo --
         while True:
             raw = reader.recv_message(conn)
             if raw is None: break
@@ -172,7 +174,6 @@ def handle_client(conn, addr):
             if command == CMD_PONG:
                 continue
             
-            # Repassa a mensagem de CHAT para a sala imediatamente
             elif command == CMD_CHAT:
                 msg_text = arg.strip()
                 if msg_text:
@@ -190,7 +191,7 @@ def handle_client(conn, addr):
                 conn.sendall(encode(CMD_ERR, "UNKNOWN_COMMAND"))
 
     except Exception as e:
-        print(f"[SERVER] Erro com {addr}: {e}")
+        print(f"[SERVER] Erro com '{player_name}': {e}")
     finally:
         if player_name:
             print(f"[SERVER] '{player_name}' desconectou.")
@@ -314,12 +315,40 @@ def _end_game():
     }))
     print(f"[SERVER] Fim de jogo! Vencedor: {winner} | Placar: {scores}")
 
+# Adicione esta pequena função debaixo do def _end_game(): e antes do def main():
+def get_local_ip():
+    """Descobre o IP local (IPv4) da máquina de forma dinâmica criando um socket UDP invisível."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Não precisa de ter internet, ele apenas simula uma ligação para ler a interface de rede ativa
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
 def main():
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((HOST, PORT))
+    if hasattr(socket, 'has_dualstack_ipv6') and socket.has_dualstack_ipv6():
+        srv = socket.create_server((HOST, PORT), family=socket.AF_INET6, dualstack_ipv6=True)
+        modo = "Dual-Stack (IPv4 e IPv6)"
+    else:
+        srv = socket.create_server((HOST, PORT))
+        modo = "Apenas IPv4"
+        
     srv.listen(2)
-    print(f"[SERVER] MGAME/1.0 aguardando jogadores em {HOST}:{PORT}...")
+    
+    # --- NOVO: Mostra o IP de forma amigável ---
+    meu_ip = get_local_ip()
+    print("="*50)
+    print(" SERVIDOR DO JOGO DA MEMORIA INICIADO!")
+    print(f" Modo: {modo}")
+    print(f" Porta: {PORT}")
+    print(f" -> Para jogar neste PC, o cliente liga em: localhost")
+    print(f" -> Para jogar na mesma rede, o cliente liga em: {meu_ip}")
+    print("="*50)
+    print(f"[SERVER] A aguardar por 2 jogadores...")
 
     t_monitor = threading.Thread(target=monitor_heartbeats, daemon=True)
     t_monitor.start()
@@ -327,11 +356,10 @@ def main():
     while True:
         try:
             conn, addr = srv.accept()
-            print(f"[SERVER] Conexao de {addr}")
             t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
             t.start()
         except KeyboardInterrupt:
-            print("\n[SERVER] Encerrando.")
+            print("\n[SERVER] A encerrar.")
             break
 
     srv.close()

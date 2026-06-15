@@ -1,6 +1,7 @@
 """
 Cliente do Jogo da Memoria Multiplayer - MGAME/1.0
 Possui interface curses com Suporte a Chat Embutido!
+Suporta resolução automática de endereços IPv4 e IPv6.
 """
 import socket
 import threading
@@ -41,7 +42,6 @@ status_msg    = ""
 status_color  = "info"
 _needs_redraw = True
 
-# === VARIÁVEIS DO CHAT ===
 chat_history = [] 
 is_typing    = False
 chat_buffer  = ""
@@ -73,11 +73,10 @@ def receiver(sock):
             except OSError: pass
             continue
             
-        # -- RECEBE MENSAGEM DO CHAT --
         if command == CMD_CHAT_MSG and payload:
             msg_formatada = f"[{payload['player']}]: {payload['msg']}"
             chat_history.append(msg_formatada)
-            if len(chat_history) > 3: # Mantém apenas as últimas 3 mensagens na tela
+            if len(chat_history) > 3:
                 chat_history.pop(0)
             _needs_redraw = True
 
@@ -208,7 +207,6 @@ if HAS_CURSES:
                         pair_idx = (ord(sym) - ord('A')) % 6 + 1
                         attrs = curses.color_pair(pair_idx) | curses.A_BOLD
                     
-                    # Desativa o fundo branco do cursor se a pessoa estiver digitando no chat
                     if idx == cursor_pos and not is_typing:
                         attrs |= curses.A_REVERSE
                         
@@ -224,15 +222,12 @@ if HAS_CURSES:
             c = color_map.get(status_color, curses.color_pair(7))
             stdscr.addstr(18, 4, f">> {status_msg}", c | curses.A_BOLD)
             
-            # --- ÁREA DO CHAT ---
             chat_y = 19
             stdscr.addstr(chat_y, 4, "-"*17 + " CHAT " + "-"*17, curses.color_pair(6))
             
-            # Histórico de mensagens
             for i, msg in enumerate(chat_history):
                 stdscr.addstr(chat_y + 1 + i, 4, msg, curses.color_pair(7))
             
-            # Rodapé dinâmico (Instruções do Jogo vs Input do Chat)
             if is_typing:
                 stdscr.addstr(chat_y + 5, 4, f"[Mensagem]: {chat_buffer}_", curses.color_pair(3))
             else:
@@ -271,31 +266,28 @@ if HAS_CURSES:
             
             if ch == -1: continue
 
-            # --- ESTADO 1: USUÁRIO DIGITANDO NO CHAT ---
             if is_typing:
-                if ch in (10, 13, curses.KEY_ENTER): # Enviou a mensagem
+                if ch in (10, 13, curses.KEY_ENTER): 
                     if chat_buffer.strip():
                         try: sock.sendall(encode(CMD_CHAT, chat_buffer.strip()))
                         except: pass
                     is_typing = False
                     chat_buffer = ""
-                elif ch == 27: # Apertou ESC (Cancela o chat)
+                elif ch == 27: 
                     is_typing = False
                     chat_buffer = ""
-                elif ch in (8, 127, curses.KEY_BACKSPACE): # Apagou caractere
+                elif ch in (8, 127, curses.KEY_BACKSPACE):
                     chat_buffer = chat_buffer[:-1]
-                elif 32 <= ch <= 126: # Caracteres válidos normais (letras, espaços)
-                    if len(chat_buffer) < 40: # Limite visual para não quebrar a tela
+                elif 32 <= ch <= 126: 
+                    if len(chat_buffer) < 40: 
                         chat_buffer += chr(ch)
-            
-            # --- ESTADO 2: JOGANDO NORMALMENTE ---
             else:
                 if ch in [ord('q'), ord('Q')]:
                     if not game_over:
                         try: sock.sendall(encode(CMD_QUIT))
                         except Exception: pass
                     break
-                elif ch in [ord('t'), ord('T')]: # Abre o chat
+                elif ch in [ord('t'), ord('T')]: 
                     is_typing = True
                     chat_buffer = ""
                 elif ch == curses.KEY_UP and cursor_pos >= 4:
@@ -322,7 +314,6 @@ if HAS_CURSES:
 
         sock.close()
 
-# Interface Console Fallback
 else:
     import queue
     input_queue = queue.Queue()
@@ -377,7 +368,6 @@ else:
             msg = f"{AM}{msg}{R}"
         print(f"  >> {msg}")
         
-        # Desenha o Chat Fallback
         if chat_history:
             print(f"  {AZ}--- Chat ---{R}")
             for chat in chat_history:
@@ -418,7 +408,6 @@ else:
                     
                 if not entry: continue
                 
-                # Trata chat via linha de comando
                 if entry.startswith("/c "):
                     sock.sendall(encode(CMD_CHAT, entry[3:]))
                     _needs_redraw = True
@@ -452,29 +441,107 @@ else:
             sock.close()
 
 
+# =============================================================================
+# MENU INTERATIVO DE INICIALIZAÇÃO
+# =============================================================================
+
+def interactive_menu(stdscr):
+    curses.curs_set(0)
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_CYAN, -1)
+
+    options = [
+        " Local (Jogar neste mesmo computador)",
+        " Conectar via IPv4 (Wi-Fi de casa, Ex: 192.168.1.15)",
+        " Conectar via IPv6 (Internet, Ex: 2804:14d::1)"
+    ]
+    current_row = 0
+
+    while True:
+        stdscr.clear()
+        stdscr.addstr(2, 4, "=== JOGO DA MEMORIA MULTIPLAYER ===", curses.color_pair(1) | curses.A_BOLD)
+        stdscr.addstr(4, 4, "Use as SETAS para escolher a rede e aperte ENTER:")
+
+        for idx, row in enumerate(options):
+            x = 4
+            y = 6 + idx
+            if idx == current_row:
+                stdscr.addstr(y, x, " > " + row + " ", curses.A_REVERSE)
+            else:
+                stdscr.addstr(y, x, "   " + row)
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP and current_row > 0:
+            current_row -= 1
+        elif key == curses.KEY_DOWN and current_row < len(options) - 1:
+            current_row += 1
+        elif key in [10, 13, 32, curses.KEY_ENTER]:
+            return current_row
+
 def main():
     global my_name, my_turn, game_over
-    server_ip = "127.0.0.1"
+    server_ip = "localhost"
 
-    if len(sys.argv) > 1:
-        my_name = sys.argv[1]
-    else:
-        my_name = input("Digite seu apelido: ").strip()
-        if not my_name:
+    sys.stdout.write("\x1b[8;35;85t")
+    sys.stdout.flush()
+    # Se a pessoa só clicou 2 vezes no script (sem parâmetros difíceis no terminal)
+    if len(sys.argv) == 1:
+        choice = 0
+        
+        # Abre o menu das setinhas temporariamente
+        if HAS_CURSES:
+            try:
+                choice = curses.wrapper(interactive_menu)
+            except Exception:
+                choice = 0
+        else:
+            # Fallback caso a pessoa rode num Windows muito antigo
+            print("\n=== JOGO DA MEMORIA MULTIPLAYER ===")
+            print("1. Local (Jogar neste mesmo computador)")
+            print("2. Conectar via IPv4 (Wi-Fi de casa, Ex: 192.168.1.15)")
+            print("3. Conectar via IPv6 (Internet, Ex: 2804:14d::1)")
+            resp = input("\nEscolha a forma de conexao (1/2/3): ").strip()
+            if resp == "2": choice = 1
+            elif resp == "3": choice = 2
+
+        # Limpa o terminal para fazer as perguntas de texto de forma limpa
+        os.system("cls" if os.name == "nt" else "clear")
+        print("\n=== CONFIGURAÇÃO DO JOGADOR ===\n")
+
+        # Pergunta o apelido
+        resp_nome = input("Digite seu apelido: ").strip()
+        if resp_nome:
+            my_name = resp_nome
+        else:
             my_name = "Jogador"
 
-    if len(sys.argv) > 2:
-        server_ip = sys.argv[2]
+        # Pede o IP apenas se a pessoa NÃO escolheu jogar Localmente
+        if choice == 1:
+            resp_ip = input("\nDigite o endereco IPv4 do servidor (Ex: 192.168.0.5): ").strip()
+            if resp_ip: server_ip = resp_ip
+        elif choice == 2:
+            resp_ip = input("\nDigite o endereco IPv6 do servidor (Ex: 2804:14d::1): ").strip()
+            if resp_ip: server_ip = resp_ip
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    else:
+        # Modo "Avançado": Se o usuário preencheu no terminal (ex: python client.py Alice 192.168.1.15)
+        my_name = sys.argv[1]
+        if len(sys.argv) > 2:
+            server_ip = sys.argv[2]
+
+    # Conecta ao Servidor com a Escolha Inteligente
     try:
-        sock.connect((server_ip, PORT))
-    except ConnectionRefusedError:
-        print(f"[CLIENTE] Nao foi possivel conectar em {server_ip}:{PORT}. Servidor esta rodando?")
+        sock = socket.create_connection((server_ip, PORT))
+    except OSError as e:
+        print(f"\n[CLIENTE] Nao foi possivel conectar em {server_ip}:{PORT}. Servidor esta rodando?")
         return
 
     sock.sendall(encode(CMD_JOIN, my_name))
 
+    # Inicia a Interface do Jogo (Tabuleiro e Chat)
     if HAS_CURSES:
         curses.wrapper(_tui_loop, sock)
     else:
