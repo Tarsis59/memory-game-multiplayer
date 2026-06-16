@@ -1,13 +1,25 @@
 """
-Cliente do Jogo da Memoria Multiplayer - MGAME/1.0
-Possui interface curses com Suporte a Chat Embutido!
-Suporta resolução automática de endereços IPv4 e IPv6.
+Cliente do Jogo da Memoria Multiplayer - TCP
+(Versão Híbrida: Menu em Curses + Interface Gráfica Pygame)
 """
 import socket
 import threading
 import sys
 import os
 import time
+
+try:
+    import pygame
+except ImportError:
+    print("\n[ERRO] A biblioteca 'pygame' não está instalada.")
+    print("Por favor, execute no terminal: pip install pygame")
+    sys.exit(1)
+
+try:
+    import curses
+    HAS_CURSES = True
+except ImportError:
+    HAS_CURSES = False
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.protocol import (
@@ -32,28 +44,23 @@ my_name      = ""
 my_matches   = []
 board_lock   = threading.Lock()
 
-try:
-    import curses
-    HAS_CURSES = True
-except ImportError:
-    HAS_CURSES = False
-
 status_msg    = ""
 status_color  = "info"
-_needs_redraw = True
 
 chat_history = [] 
 is_typing    = False
 chat_buffer  = ""
 
+
 def set_status(msg, stype="info"):
-    global status_msg, status_color, _needs_redraw
+    global status_msg, status_color
     status_msg = msg
     status_color = stype
-    _needs_redraw = True
+
 
 def receiver(sock):
-    global my_turn, game_over, my_matches, chat_history, _needs_redraw
+    """Thread em background que processa todos os pacotes TCP da rede."""
+    global my_turn, game_over, my_matches, chat_history
     reader = ProtocolReader()
     receiver_flips = 0
 
@@ -61,27 +68,25 @@ def receiver(sock):
         raw = reader.recv_message(sock)
         if raw is None:
             if not game_over:
-                set_status("Conexao perdida com o servidor. Pressione 'Q' para sair.", "error")
+                set_status("Conexão perdida com o servidor.", "error")
                 game_over = True
             break
 
         command, arg, payload = decode(raw)
 
         if command == CMD_PING:
-            try:
-                sock.sendall(encode(CMD_PONG))
+            try: sock.sendall(encode(CMD_PONG))
             except OSError: pass
             continue
             
         if command == CMD_CHAT_MSG and payload:
-            msg_formatada = f"[{payload['player']}]: {payload['msg']}"
+            msg_formatada = f"{payload['player']}: {payload['msg']}"
             chat_history.append(msg_formatada)
-            if len(chat_history) > 3:
+            if len(chat_history) > 6:
                 chat_history.pop(0)
-            _needs_redraw = True
 
         elif command == CMD_OK and arg == "WAITING":
-            set_status("Conectado! Aguardando segundo jogador...", "info")
+            set_status("Aguardar pelo 2º jogador...", "info")
 
         elif command == CMD_GAME_START and payload:
             board_size = payload.get("board_size", 16)
@@ -91,13 +96,13 @@ def receiver(sock):
                     revealed[i] = False
                     my_matches.clear()
             players = payload.get("players", [])
-            set_status(f"Jogo iniciado! {' vs '.join(players)}", "info")
+            set_status(f"Jogo Iniciado! {' vs '.join(players)}", "info")
             receiver_flips = 0
 
         elif command == CMD_YOUR_TURN:
             my_turn = True
             receiver_flips = 0
-            set_status(f"{my_name}, SUA VEZ!", "turn")
+            set_status(f"{my_name}, É A SUA VEZ!", "turn")
 
         elif command == CMD_WAIT_TURN:
             my_turn = False
@@ -110,23 +115,23 @@ def receiver(sock):
             player = payload["player"]
             with board_lock:
                 board[pos] = symbol
-            set_status(f"{player} revelou a posicao {pos} -> [{symbol}]", "info")
+            set_status(f"{player} virou a carta {pos}", "info")
             if player == my_name:
                 receiver_flips += 1
                 if receiver_flips >= 2:
                     my_turn = False
                 elif receiver_flips == 1:
-                    set_status("Agora escolha a SEGUNDA carta.", "turn")
+                    set_status("Escolha a SEGUNDA carta.", "turn")
 
         elif command == CMD_MATCH and payload:
             positions = payload["positions"]
-            symbol    = payload["symbol"]
-            player    = payload["player"]
+            symbol = payload["symbol"]
+            player = payload["player"]
             with board_lock:
                 for pos in positions:
                     revealed[pos] = True
                     board[pos]    = symbol
-            set_status(f"PAR! {player} encontrou [{symbol}]!", "win")
+            set_status(f"PAR! {player} acertou no [{symbol}]!", "win")
             if player == my_name:
                 my_matches.append((symbol, list(positions)))
             time.sleep(1.0)
@@ -134,37 +139,34 @@ def receiver(sock):
         elif command == CMD_NO_MATCH and payload:
             positions = payload["positions"]
             player    = payload["player"]
-            with board_lock:
-                cards_str = " e ".join(f"[{board[p]}]" for p in positions)
-            set_status(f"{player} tirou {cards_str}. Sem par!", "error")
-            time.sleep(2.5)
+            set_status(f"{player} falhou o par!", "error")
+            
+            time.sleep(2.5) 
+            
             with board_lock:
                 for pos in positions:
                     board[pos] = "?"
-            set_status("Cartas viradas. Proximo jogador.", "info")
+            set_status("Cartas ocultadas. Próximo jogador.", "info")
 
         elif command == CMD_SCORE_UPDATE and payload:
             scores.update(payload.get("scores", {}))
 
         elif command == CMD_GAME_OVER and payload:
-            my_turn   = False
+            my_turn = False
             final_scores = payload.get("scores", {})
-            winner       = payload.get("winner", "?")
+            winner = payload.get("winner", "?")
             scores.update(final_scores)
-            set_status("Fim de jogo! Revelando todas as cartas...", "info")
-            time.sleep(2.0)
+            
+            time.sleep(1.0)
             if winner == "EMPATE":
-                msg = "FIM DE JOGO: EMPATE! | "
+                set_status("FIM DE JOGO: EMPATE!", "win")
             else:
-                msg = f"VENCEDOR: {winner}! | "
-            msg += " ".join(f"{n}: {s} pts" for n,s in final_scores.items())
-            msg += " | Pressione 'Q' para sair."
-            set_status(msg, "win")
+                set_status(f"VENCEDOR: {winner}!", "win")
             game_over = True
 
         elif command == CMD_PLAYER_LEFT:
-            my_turn   = False
-            set_status(f"{arg} abandonou a partida. Pressione 'Q' para sair.", "error")
+            my_turn = False
+            set_status(f"O jogador {arg} abandonou a partida.", "error")
             game_over = True
 
         elif command == CMD_ERR:
@@ -174,278 +176,191 @@ def receiver(sock):
             game_over = True
             break
 
-if HAS_CURSES:
-    cursor_pos = 0
 
-    def _draw_screen(stdscr):
-        global cursor_pos, chat_history, is_typing, chat_buffer
-        stdscr.erase()
-        try:
-            stdscr.addstr(1, 4, "=" * 42, curses.color_pair(4))
-            stdscr.addstr(2, 4, "   JOGO DA MEMORIA MULTIPLAYER", curses.color_pair(3) | curses.A_BOLD)
-            stdscr.addstr(3, 4, "=" * 42, curses.color_pair(4))
+# =============================================================================
+# INTERFACE GRÁFICA (PYGAME) E MOTOR DE RENDERIZAÇÃO
+# =============================================================================
+def start_gui(sock):
+    global my_turn, game_over, is_typing, chat_buffer
 
-            if scores:
-                placar_str = " | ".join(f"{n}: {s} pts" for n, s in scores.items())
-                stdscr.addstr(5, 4, f"Placar -> {placar_str}", curses.color_pair(1) | curses.A_BOLD)
+    pygame.init()
+    WIDTH, HEIGHT = 1000, 650
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption(f"Memory Game - Ligado como: {my_name}")
+    clock = pygame.time.Clock()
 
-            revealed_count = sum(1 for r in revealed if r)
-            pairs_left = 8 - revealed_count // 2
-            stdscr.addstr(6, 4, f"Pares restantes: {pairs_left}", curses.color_pair(3))
+    font_title = pygame.font.SysFont("segoeui", 36, bold=True)
+    font_text = pygame.font.SysFont("segoeui", 24)
+    font_small = pygame.font.SysFont("segoeui", 18)
+    font_card = pygame.font.SysFont("segoeui", 60, bold=True)
 
-            start_y, start_x = 8, 8
-            stdscr.addstr(start_y, start_x, "  +-----+-----+-----+-----+", curses.color_pair(4))
+    BG_COLOR = (30, 30, 42)
+    PANEL_COLOR = (40, 42, 54)
+    CARD_BACK = (98, 114, 164)
+    CARD_HOVER = (139, 155, 201)
+    CARD_REVEALED = (248, 248, 242)
+    TEXT_LIGHT = (248, 248, 242)
+    LINE_COLOR = (68, 71, 90)
+
+    SYMBOL_COLORS = {
+        "A": (255, 85, 85),   "B": (80, 250, 123),
+        "C": (241, 250, 140), "D": (139, 233, 253),
+        "E": (189, 147, 249), "F": (255, 184, 108),
+        "G": (255, 121, 198), "H": (139, 195, 74),
+    }
+
+    color_map = {
+        "info": (139, 233, 253), "error": (255, 85, 85),
+        "turn": (241, 250, 140), "win": (80, 250, 123)
+    }
+
+    t = threading.Thread(target=receiver, args=(sock,), daemon=True)
+    t.start()
+
+    running = True
+    while running:
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if event.pos[0] > 620 and event.pos[1] > 550:
+                    is_typing = True
+                else:
+                    is_typing = False
+                    if my_turn and not game_over:
+                        for row in range(4):
+                            for col in range(4):
+                                idx = row * 4 + col
+                                cx = 50 + col * 130
+                                cy = 50 + row * 140
+                                card_rect = pygame.Rect(cx, cy, 110, 120)
+                                if card_rect.collidepoint(event.pos):
+                                    with board_lock:
+                                        if not revealed[idx] and board[idx] == "?":
+                                            try: sock.sendall(encode(CMD_FLIP, str(idx)))
+                                            except: pass
+                                        else:
+                                            set_status("Carta já revelada!", "error")
+                    elif not my_turn and not game_over:
+                        set_status("Aguarde a sua vez!", "error")
+
+            elif event.type == pygame.KEYDOWN:
+                if game_over:
+                    if event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                        running = False
+                else:
+                    if is_typing:
+                        if event.key == pygame.K_RETURN:
+                            if chat_buffer.strip():
+                                try: sock.sendall(encode(CMD_CHAT, chat_buffer.strip()))
+                                except: pass
+                            chat_buffer = ""
+                            is_typing = False
+                        elif event.key == pygame.K_ESCAPE:
+                            is_typing = False
+                            chat_buffer = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            chat_buffer = chat_buffer[:-1]
+                        else:
+                            if len(chat_buffer) < 30 and event.unicode.isprintable():
+                                chat_buffer += event.unicode
+                    else:
+                        if event.key == pygame.K_t:
+                            is_typing = True
+                            chat_buffer = ""
+                        elif event.key == pygame.K_q:
+                            running = False
+
+        screen.fill(BG_COLOR)
+
+        with board_lock:
             for row in range(4):
                 for col in range(4):
                     idx = row * 4 + col
-                    with board_lock:
-                        is_rev = revealed[idx]
-                        sym = board[idx]
-                    text = f" {sym} " if (is_rev or sym != "?") else " ? "
-                    attrs = curses.color_pair(5)
-                    if sym != "?" and sym in "ABCDEFGH":
-                        pair_idx = (ord(sym) - ord('A')) % 6 + 1
-                        attrs = curses.color_pair(pair_idx) | curses.A_BOLD
+                    cx = 50 + col * 130
+                    cy = 50 + row * 140
+                    card_rect = pygame.Rect(cx, cy, 110, 120)
                     
-                    if idx == cursor_pos and not is_typing:
-                        attrs |= curses.A_REVERSE
-                        
-                    stdscr.addstr(start_y + 1 + row*2, start_x + 2 + col*6, "|", curses.color_pair(4))
-                    stdscr.addstr(start_y + 1 + row*2, start_x + 3 + col*6, text, attrs)
-                stdscr.addstr(start_y + 1 + row*2, start_x + 2 + 24, "|", curses.color_pair(4))
-                stdscr.addstr(start_y + 2 + row*2, start_x, "  +-----+-----+-----+-----+", curses.color_pair(4))
+                    is_rev = revealed[idx]
+                    sym = board[idx]
 
-            color_map = {
-                "info": curses.color_pair(4), "error": curses.color_pair(2),
-                "turn": curses.color_pair(3), "win": curses.color_pair(1),
-            }
-            c = color_map.get(status_color, curses.color_pair(7))
-            stdscr.addstr(18, 4, f">> {status_msg}", c | curses.A_BOLD)
-            
-            chat_y = 19
-            stdscr.addstr(chat_y, 4, "-"*17 + " CHAT " + "-"*17, curses.color_pair(6))
-            
-            for i, msg in enumerate(chat_history):
-                stdscr.addstr(chat_y + 1 + i, 4, msg, curses.color_pair(7))
-            
-            if is_typing:
-                stdscr.addstr(chat_y + 5, 4, f"[Mensagem]: {chat_buffer}_", curses.color_pair(3))
-            else:
-                stdscr.addstr(chat_y + 5, 4, "[T] Abrir Chat | [Setas] Mover | [ENTER] Virar | [Q] Sair", curses.color_pair(7))
-                
-        except curses.error:
-            pass
-        stdscr.refresh()
-
-    def _tui_loop(stdscr, sock):
-        global cursor_pos, game_over, is_typing, chat_buffer
-        curses.curs_set(0)
-        stdscr.timeout(100)
-        curses.start_color()
-        curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_GREEN, -1)
-        curses.init_pair(2, curses.COLOR_RED, -1)
-        curses.init_pair(3, curses.COLOR_YELLOW, -1)
-        curses.init_pair(4, curses.COLOR_CYAN, -1)
-        curses.init_pair(5, curses.COLOR_MAGENTA, -1)
-        curses.init_pair(6, curses.COLOR_BLUE, -1)
-        curses.init_pair(7, curses.COLOR_WHITE, -1)
-
-        t = threading.Thread(target=receiver, args=(sock,), daemon=True)
-        t.start()
-
-        while True:
-            _draw_screen(stdscr)
-            try:
-                ch = stdscr.getch()
-            except curses.error:
-                ch = -1
-
-            if game_over and ch in [ord('q'), ord('Q')]:
-                break
-            
-            if ch == -1: continue
-
-            if is_typing:
-                if ch in (10, 13, curses.KEY_ENTER): 
-                    if chat_buffer.strip():
-                        try: sock.sendall(encode(CMD_CHAT, chat_buffer.strip()))
-                        except: pass
-                    is_typing = False
-                    chat_buffer = ""
-                elif ch == 27: 
-                    is_typing = False
-                    chat_buffer = ""
-                elif ch in (8, 127, curses.KEY_BACKSPACE):
-                    chat_buffer = chat_buffer[:-1]
-                elif 32 <= ch <= 126: 
-                    if len(chat_buffer) < 40: 
-                        chat_buffer += chr(ch)
-            else:
-                if ch in [ord('q'), ord('Q')]:
-                    if not game_over:
-                        try: sock.sendall(encode(CMD_QUIT))
-                        except Exception: pass
-                    break
-                elif ch in [ord('t'), ord('T')]: 
-                    is_typing = True
-                    chat_buffer = ""
-                elif ch == curses.KEY_UP and cursor_pos >= 4:
-                    cursor_pos -= 4
-                elif ch == curses.KEY_DOWN and cursor_pos <= 11:
-                    cursor_pos += 4
-                elif ch == curses.KEY_LEFT and cursor_pos % 4 != 0:
-                    cursor_pos -= 1
-                elif ch == curses.KEY_RIGHT and cursor_pos % 4 != 3:
-                    cursor_pos += 1
-                elif ch in (10, 13, 32, curses.KEY_ENTER):
-                    if my_turn:
-                        with board_lock:
-                            is_rev = revealed[cursor_pos]
-                        if not is_rev:
-                            try:
-                                sock.sendall(encode(CMD_FLIP, str(cursor_pos)))
-                            except Exception:
-                                pass
-                        else:
-                            set_status("Carta ja revelada! Escolha outra.", "error")
+                    if is_rev or sym != "?":
+                        pygame.draw.rect(screen, CARD_REVEALED, card_rect, border_radius=12)
+                        pygame.draw.rect(screen, LINE_COLOR, card_rect, width=3, border_radius=12)
+                        sym_color = SYMBOL_COLORS.get(sym, (0, 0, 0))
+                        txt_surface = font_card.render(sym, True, sym_color)
+                        txt_rect = txt_surface.get_rect(center=card_rect.center)
+                        screen.blit(txt_surface, txt_rect)
                     else:
-                        set_status("Aguarde a sua vez para jogar!", "error")
+                        color = CARD_HOVER if card_rect.collidepoint(mouse_pos) and my_turn else CARD_BACK
+                        pygame.draw.rect(screen, color, card_rect, border_radius=12)
+                        pygame.draw.rect(screen, LINE_COLOR, card_rect, width=3, border_radius=12)
+                        pygame.draw.circle(screen, BG_COLOR, card_rect.center, 25, 4)
 
-        sock.close()
+        panel_rect = pygame.Rect(600, 0, 400, HEIGHT)
+        pygame.draw.rect(screen, PANEL_COLOR, panel_rect)
+        pygame.draw.line(screen, LINE_COLOR, (600, 0), (600, HEIGHT), 4)
 
-else:
-    import queue
-    input_queue = queue.Queue()
+        title_surf = font_title.render("Placar", True, TEXT_LIGHT)
+        screen.blit(title_surf, (620, 20))
 
-    CORES_CARTAS = {
-        "A": "\033[91m", "B": "\033[92m", "C": "\033[93m",
-        "D": "\033[94m", "E": "\033[95m", "F": "\033[96m",
-        "G": "\033[92;1m", "H": "\033[93;1m",
-    }
-    R = "\033[0m"; VR = "\033[92m"; VM = "\033[91m"
-    AM = "\033[93m"; AZ = "\033[94m"; CI = "\033[96m"; BR = "\033[1m"
+        y_score = 70
+        for p_name, s in scores.items():
+            color = (80, 250, 123) if p_name == my_name else TEXT_LIGHT
+            sc_surf = font_text.render(f"{p_name}: {s} pontos", True, color)
+            screen.blit(sc_surf, (620, y_score))
+            y_score += 35
 
-    def _clear():
-        os.system("cls" if os.name == "nt" else "clear")
+        rev_count = sum(1 for r in revealed if r)
+        p_left = 8 - (rev_count // 2)
+        stat_surf = font_small.render(f"Pares restantes: {p_left}", True, (241, 250, 140))
+        screen.blit(stat_surf, (620, y_score + 10))
 
-    def _console_render():
-        _clear()
-        print(f"{CI}{'=' * 42}{R}")
-        print(f"{AM}   JOGO DA MEMORIA MULTIPLAYER{R}")
-        print(f"{CI}{'=' * 42}{R}")
-        if scores:
-            placar = "  " + f"  {R}".join(f"{BR}{n}{R}: {VR}{s}{R} pts" for n, s in scores.items())
-            print(f"{CI}  Placar ->{R}{placar}")
-        revealed_count = sum(1 for r in revealed if r)
-        print(f"  Pares restantes: {8 - revealed_count // 2}")
-        print()
-        print(f"     {AZ}0{R}    {AZ}1{R}    {AZ}2{R}    {AZ}3{R}")
-        print(f"  {CI}+----+----+----+----+{R}")
-        for row in range(4):
-            cells = ""
-            for col in range(4):
-                pos = row * 4 + col
-                if revealed[pos] or board[pos] != "?":
-                    simbolo = board[pos]
-                    cor = CORES_CARTAS.get(simbolo, BR)
-                    val = f"{cor}{simbolo:^3}{R}"
-                else:
-                    val = f" {AM}?{R} "
-                cells += f"{val}|"
-            print(f"{AZ}{row}{R} |{cells}")
-            if row < 3:
-                print(f"  {CI}+----+----+----+----+{R}")
-        print(f"  {CI}+----+----+----+----+{R}")
-        print()
+        pygame.draw.line(screen, LINE_COLOR, (620, y_score + 40), (980, y_score + 40), 2)
 
-        msg = status_msg
-        if "PAR!" in msg or "Vencedor" in msg or "VENCEDOR" in msg:
-            msg = f"{VR}{msg}{R}"
-        elif "erro" in msg or "Erro" in msg or "ERRO" in msg or "Sem par" in msg:
-            msg = f"{VM}{msg}{R}"
-        elif "SUA VEZ" in msg:
-            msg = f"{AM}{msg}{R}"
-        print(f"  >> {msg}")
-        
-        if chat_history:
-            print(f"  {AZ}--- Chat ---{R}")
-            for chat in chat_history:
-                print(f"  {chat}")
-            print()
-            
-        if my_turn:
-            print(f"  {AM}Digite a posicao (0-15) ou /c <mensagem> para o chat:{R} ", end="", flush=True)
+        st_color = color_map.get(status_color, TEXT_LIGHT)
+        status_surf = font_text.render(status_msg, True, st_color)
+        screen.blit(status_surf, (620, y_score + 60))
+
+        pygame.draw.line(screen, LINE_COLOR, (620, y_score + 110), (980, y_score + 110), 2)
+
+        screen.blit(font_small.render("Chat em direto:", True, (98, 114, 164)), (620, y_score + 120))
+        chat_y = y_score + 150
+        for msg in chat_history:
+            chat_surf = font_small.render(msg, True, TEXT_LIGHT)
+            screen.blit(chat_surf, (620, chat_y))
+            chat_y += 25
+
+        input_box = pygame.Rect(620, HEIGHT - 80, 360, 40)
+        box_color = (255, 121, 198) if is_typing else LINE_COLOR
+        pygame.draw.rect(screen, (30, 30, 42), input_box, border_radius=8)
+        pygame.draw.rect(screen, box_color, input_box, width=2, border_radius=8)
+
+        if is_typing:
+            in_surf = font_small.render(chat_buffer + "|", True, TEXT_LIGHT)
         else:
-            print(f"  {AM}Aguarde sua vez, ou digite /c <mensagem> para o chat:{R} ", end="", flush=True)
+            in_surf = font_small.render("Clique aqui ou pressione 'T' para o chat", True, (98, 114, 164))
+        
+        screen.blit(in_surf, (630, HEIGHT - 70))
 
-    def _input_listener():
-        while not game_over:
-            try:
-                line = sys.stdin.readline()
-                if line:
-                    input_queue.put(line.strip())
-            except (EOFError, OSError):
-                break
+        pygame.display.flip()
+        clock.tick(60)
 
-    def _console_main(sock):
-        global my_turn, game_over, _needs_redraw
-        t = threading.Thread(target=receiver, args=(sock,), daemon=True)
-        t.start()
-        inp = threading.Thread(target=_input_listener, daemon=True)
-        inp.start()
-
-        try:
-            while not game_over:
-                if _needs_redraw:
-                    _console_render()
-                    _needs_redraw = False
-                    
-                try:
-                    entry = input_queue.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-                    
-                if not entry: continue
-                
-                if entry.startswith("/c "):
-                    sock.sendall(encode(CMD_CHAT, entry[3:]))
-                    _needs_redraw = True
-                    continue
-                    
-                if entry.lower() in ("quit", "sair", "q"):
-                    sock.sendall(encode(CMD_QUIT))
-                    break
-                    
-                if my_turn:
-                    try:
-                        pos = int(entry)
-                        if 0 <= pos <= 15:
-                            with board_lock:
-                                if revealed[pos]:
-                                    print("\n  Carta ja revelada! Escolha outra posicao.")
-                                    _needs_redraw = True
-                                    continue
-                            sock.sendall(encode(CMD_FLIP, str(pos)))
-                            _needs_redraw = True
-                        else:
-                            print("\n  Posicao invalida. Digite entre 0 e 15.")
-                            _needs_redraw = True
-                    except ValueError:
-                        print("\n  Digite um numero ou /c para chat.")
-                        _needs_redraw = True
-        except KeyboardInterrupt:
-            sock.sendall(encode(CMD_QUIT))
-        finally:
-            game_over = True
-            sock.close()
+    try: sock.sendall(encode(CMD_QUIT))
+    except: pass
+    sock.close()
+    pygame.quit()
 
 
 # =============================================================================
-# MENU INTERATIVO DE INICIALIZAÇÃO
+# WIZARD DE TERMINAL E INICIALIZAÇÃO
 # =============================================================================
 
 def interactive_menu(stdscr):
+    """Menu bonito renderizado com curses."""
     curses.curs_set(0)
     curses.start_color()
     curses.use_default_colors()
@@ -460,7 +375,7 @@ def interactive_menu(stdscr):
 
     while True:
         stdscr.clear()
-        stdscr.addstr(2, 4, "=== JOGO DA MEMORIA MULTIPLAYER ===", curses.color_pair(1) | curses.A_BOLD)
+        stdscr.addstr(2, 4, "=== JOGO DA MEMÓRIA MULTIPLAYER (Pygame Edition) ===", curses.color_pair(1) | curses.A_BOLD)
         stdscr.addstr(4, 4, "Use as SETAS para escolher a rede e aperte ENTER:")
 
         for idx, row in enumerate(options):
@@ -481,73 +396,75 @@ def interactive_menu(stdscr):
         elif key in [10, 13, 32, curses.KEY_ENTER]:
             return current_row
 
+
 def main():
-    global my_name, my_turn, game_over
+    global my_name
     server_ip = "localhost"
 
-    sys.stdout.write("\x1b[8;35;85t")
-    sys.stdout.flush()
-    # Se a pessoa só clicou 2 vezes no script (sem parâmetros difíceis no terminal)
+    # Inicia sem argumentos de terminal
     if len(sys.argv) == 1:
         choice = 0
         
-        # Abre o menu das setinhas temporariamente
         if HAS_CURSES:
             try:
+                # Dispara o menu bonitão interativo
                 choice = curses.wrapper(interactive_menu)
             except Exception:
                 choice = 0
         else:
-            # Fallback caso a pessoa rode num Windows muito antigo
-            print("\n=== JOGO DA MEMORIA MULTIPLAYER ===")
-            print("1. Local (Jogar neste mesmo computador)")
-            print("2. Conectar via IPv4 (Wi-Fi de casa, Ex: 192.168.1.15)")
-            print("3. Conectar via IPv6 (Internet, Ex: 2804:14d::1)")
-            resp = input("\nEscolha a forma de conexao (1/2/3): ").strip()
-            if resp == "2": choice = 1
-            elif resp == "3": choice = 2
+            # Fallback feio caso não tenha curses (Windows sem o pacote)
+            os.system("cls" if os.name == "nt" else "clear")
+            print("="*50)
+            print("=== JOGO DA MEMÓRIA MULTIPLAYER (Pygame Edition) ===")
+            print("="*50)
+            print("Selecione onde está o servidor:")
+            print("  [1] Jogar localmente (Neste computador)")
+            print("  [2] Rede Wi-Fi (IPv4) - Inserir o IP")
+            print("  [3] Internet (IPv6) - Inserir o IP")
+            
+            while True:
+                resp = input("\nEscolha (1/2/3): ").strip()
+                if resp == '1':
+                    choice = 0
+                    break
+                elif resp == '2':
+                    choice = 1
+                    break
+                elif resp == '3':
+                    choice = 2
+                    break
+                print("Opção inválida.")
 
-        # Limpa o terminal para fazer as perguntas de texto de forma limpa
         os.system("cls" if os.name == "nt" else "clear")
         print("\n=== CONFIGURAÇÃO DO JOGADOR ===\n")
+        my_name = input("Digite o seu apelido: ").strip() or "Jogador"
 
-        # Pergunta o apelido
-        resp_nome = input("Digite seu apelido: ").strip()
-        if resp_nome:
-            my_name = resp_nome
-        else:
-            my_name = "Jogador"
-
-        # Pede o IP apenas se a pessoa NÃO escolheu jogar Localmente
         if choice == 1:
-            resp_ip = input("\nDigite o endereco IPv4 do servidor (Ex: 192.168.0.5): ").strip()
-            if resp_ip: server_ip = resp_ip
+            server_ip = input("\nDigite o IPv4 do servidor (Ex: 192.168.1.15): ").strip()
         elif choice == 2:
-            resp_ip = input("\nDigite o endereco IPv6 do servidor (Ex: 2804:14d::1): ").strip()
-            if resp_ip: server_ip = resp_ip
+            server_ip = input("\nDigite o IPv6 do servidor (Ex: 2804:14d::1): ").strip()
 
     else:
-        # Modo "Avançado": Se o usuário preencheu no terminal (ex: python client.py Alice 192.168.1.15)
+        # Pula as perguntas se abrir via terminal
         my_name = sys.argv[1]
         if len(sys.argv) > 2:
             server_ip = sys.argv[2]
 
-    # Conecta ao Servidor com a Escolha Inteligente
+    print(f"\nA ligar a {server_ip}:{PORT}...")
+
     try:
-        sock = socket.create_connection((server_ip, PORT))
+        sock = socket.create_connection((server_ip, PORT), timeout=5)
+        sock.settimeout(None) 
     except OSError as e:
-        print(f"\n[CLIENTE] Nao foi possivel conectar em {server_ip}:{PORT}. Servidor esta rodando?")
+        print(f"\n[ERRO] Não foi possível ligar a {server_ip}:{PORT}.")
+        print("O servidor está a correr? O IP está correto?")
         return
 
     sock.sendall(encode(CMD_JOIN, my_name))
+    
+    # Inicia a Interface Gráfica após concluir as perguntas do terminal
+    start_gui(sock)
 
-    # Inicia a Interface do Jogo (Tabuleiro e Chat)
-    if HAS_CURSES:
-        curses.wrapper(_tui_loop, sock)
-    else:
-        _console_main(sock)
-
-    print(f"\n[CLIENTE] Desconectado. Ate a proxima!")
 
 if __name__ == "__main__":
     main()
