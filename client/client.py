@@ -1,6 +1,6 @@
 """
 Cliente do Jogo da Memoria Multiplayer - TCP
-(Versão Híbrida: Menu em Curses + Interface Gráfica Pygame)
+(Versão Híbrida: Menu em Curses + Interface Gráfica Pygame c/ Sombras e Efeitos Táteis)
 """
 import socket
 import threading
@@ -125,8 +125,8 @@ def receiver(sock):
 
         elif command == CMD_MATCH and payload:
             positions = payload["positions"]
-            symbol = payload["symbol"]
-            player = payload["player"]
+            symbol    = payload["symbol"]
+            player    = payload["player"]
             with board_lock:
                 for pos in positions:
                     revealed[pos] = True
@@ -152,9 +152,9 @@ def receiver(sock):
             scores.update(payload.get("scores", {}))
 
         elif command == CMD_GAME_OVER and payload:
-            my_turn = False
+            my_turn   = False
             final_scores = payload.get("scores", {})
-            winner = payload.get("winner", "?")
+            winner       = payload.get("winner", "?")
             scores.update(final_scores)
             
             time.sleep(1.0)
@@ -165,7 +165,7 @@ def receiver(sock):
             game_over = True
 
         elif command == CMD_PLAYER_LEFT:
-            my_turn = False
+            my_turn   = False
             set_status(f"O jogador {arg} abandonou a partida.", "error")
             game_over = True
 
@@ -190,17 +190,17 @@ def start_gui(sock):
     clock = pygame.time.Clock()
 
     font_title = pygame.font.SysFont("segoeui", 36, bold=True)
-    font_text = pygame.font.SysFont("segoeui", 24)
+    font_text  = pygame.font.SysFont("segoeui", 24)
     font_small = pygame.font.SysFont("segoeui", 18)
-    font_card = pygame.font.SysFont("segoeui", 60, bold=True)
+    font_card  = pygame.font.SysFont("segoeui", 60, bold=True)
 
-    BG_COLOR = (30, 30, 42)
-    PANEL_COLOR = (40, 42, 54)
-    CARD_BACK = (98, 114, 164)
-    CARD_HOVER = (139, 155, 201)
-    CARD_REVEALED = (248, 248, 242)
-    TEXT_LIGHT = (248, 248, 242)
-    LINE_COLOR = (68, 71, 90)
+    BG_COLOR       = (30, 30, 42)
+    PANEL_COLOR    = (40, 42, 54)
+    CARD_BACK      = (98, 114, 164)
+    CARD_HOVER     = (139, 155, 201)
+    CARD_REVEALED  = (248, 248, 242)
+    TEXT_LIGHT     = (248, 248, 242)
+    LINE_COLOR     = (68, 71, 90)
 
     SYMBOL_COLORS = {
         "A": (255, 85, 85),   "B": (80, 250, 123),
@@ -276,6 +276,7 @@ def start_gui(sock):
 
         screen.fill(BG_COLOR)
 
+        # 1. Desenhar a Grelha de Cartas (Esquerda)
         with board_lock:
             for row in range(4):
                 for col in range(4):
@@ -286,27 +287,56 @@ def start_gui(sock):
                     
                     is_rev = revealed[idx]
                     sym = board[idx]
+                    
+                    # Lógica de interação visual (Hover tátil)
+                    is_hovered = card_rect.collidepoint(mouse_pos) and my_turn and not is_rev and not game_over
+                    offset_y = -6 if is_hovered else 0 
+                    
+                    # Desenho da Sombra (Drop Shadow)
+                    shadow_rect = card_rect.copy()
+                    shadow_rect.move_ip(4, 4) 
+                    pygame.draw.rect(screen, (15, 15, 22), shadow_rect, border_radius=12)
+
+                    # Retângulo real da carta (aplicando o offset do hover)
+                    display_rect = card_rect.copy()
+                    display_rect.move_ip(0, offset_y)
 
                     if is_rev or sym != "?":
-                        pygame.draw.rect(screen, CARD_REVEALED, card_rect, border_radius=12)
-                        pygame.draw.rect(screen, LINE_COLOR, card_rect, width=3, border_radius=12)
+                        # Frente da Carta
+                        pygame.draw.rect(screen, CARD_REVEALED, display_rect, border_radius=12)
+                        pygame.draw.rect(screen, LINE_COLOR, display_rect, width=3, border_radius=12)
+                        
                         sym_color = SYMBOL_COLORS.get(sym, (0, 0, 0))
                         txt_surface = font_card.render(sym, True, sym_color)
-                        txt_rect = txt_surface.get_rect(center=card_rect.center)
+                        txt_rect = txt_surface.get_rect(center=display_rect.center)
                         screen.blit(txt_surface, txt_rect)
                     else:
-                        color = CARD_HOVER if card_rect.collidepoint(mouse_pos) and my_turn else CARD_BACK
-                        pygame.draw.rect(screen, color, card_rect, border_radius=12)
-                        pygame.draw.rect(screen, LINE_COLOR, card_rect, width=3, border_radius=12)
-                        pygame.draw.circle(screen, BG_COLOR, card_rect.center, 25, 4)
+                        # Costas da Carta
+                        color = CARD_HOVER if is_hovered else CARD_BACK
+                        pygame.draw.rect(screen, color, display_rect, border_radius=12)
+                        pygame.draw.rect(screen, LINE_COLOR, display_rect, width=3, border_radius=12)
+                        
+                        # Design Geométrico Estilizado (Losango / Cristal)
+                        center = display_rect.center
+                        pygame.draw.polygon(screen, BG_COLOR, [
+                            (center[0], center[1] - 25),
+                            (center[0] + 25, center[1]),
+                            (center[0], center[1] + 25),
+                            (center[0] - 25, center[1])
+                        ], width=4)
+                        pygame.draw.circle(screen, BG_COLOR, center, 8)
 
+        # 2. Desenhar Painel Lateral (Direita)
         panel_rect = pygame.Rect(600, 0, 400, HEIGHT)
+        # Sombra do Painel Lateral
+        pygame.draw.line(screen, (20, 20, 30), (598, 0), (598, HEIGHT), 4)
         pygame.draw.rect(screen, PANEL_COLOR, panel_rect)
-        pygame.draw.line(screen, LINE_COLOR, (600, 0), (600, HEIGHT), 4)
 
+        # Título
         title_surf = font_title.render("Placar", True, TEXT_LIGHT)
         screen.blit(title_surf, (620, 20))
 
+        # Pontuações
         y_score = 70
         for p_name, s in scores.items():
             color = (80, 250, 123) if p_name == my_name else TEXT_LIGHT
@@ -314,6 +344,7 @@ def start_gui(sock):
             screen.blit(sc_surf, (620, y_score))
             y_score += 35
 
+        # Estatísticas Globais
         rev_count = sum(1 for r in revealed if r)
         p_left = 8 - (rev_count // 2)
         stat_surf = font_small.render(f"Pares restantes: {p_left}", True, (241, 250, 140))
@@ -321,26 +352,36 @@ def start_gui(sock):
 
         pygame.draw.line(screen, LINE_COLOR, (620, y_score + 40), (980, y_score + 40), 2)
 
+        # Mensagem de Status Principal
         st_color = color_map.get(status_color, TEXT_LIGHT)
         status_surf = font_text.render(status_msg, True, st_color)
         screen.blit(status_surf, (620, y_score + 60))
 
         pygame.draw.line(screen, LINE_COLOR, (620, y_score + 110), (980, y_score + 110), 2)
 
+        # 3. Área do Chat Histórico
         screen.blit(font_small.render("Chat em direto:", True, (98, 114, 164)), (620, y_score + 120))
-        chat_y = y_score + 150
+        
+        # Fundo do Chat para destacar
+        chat_bg = pygame.Rect(620, y_score + 145, 360, 160)
+        pygame.draw.rect(screen, (30, 32, 42), chat_bg, border_radius=6)
+        
+        chat_y = y_score + 155
         for msg in chat_history:
             chat_surf = font_small.render(msg, True, TEXT_LIGHT)
-            screen.blit(chat_surf, (620, chat_y))
+            screen.blit(chat_surf, (630, chat_y)) 
             chat_y += 25
 
+        # Caixa de Input de Chat
         input_box = pygame.Rect(620, HEIGHT - 80, 360, 40)
         box_color = (255, 121, 198) if is_typing else LINE_COLOR
         pygame.draw.rect(screen, (30, 30, 42), input_box, border_radius=8)
         pygame.draw.rect(screen, box_color, input_box, width=2, border_radius=8)
 
         if is_typing:
-            in_surf = font_small.render(chat_buffer + "|", True, TEXT_LIGHT)
+            # Animação simples de cursor piscando
+            cursor = "|" if time.time() % 1 > 0.5 else ""
+            in_surf = font_small.render(chat_buffer + cursor, True, TEXT_LIGHT)
         else:
             in_surf = font_small.render("Clique aqui ou pressione 'T' para o chat", True, (98, 114, 164))
         
@@ -407,12 +448,10 @@ def main():
         
         if HAS_CURSES:
             try:
-                # Dispara o menu bonitão interativo
                 choice = curses.wrapper(interactive_menu)
             except Exception:
                 choice = 0
         else:
-            # Fallback feio caso não tenha curses (Windows sem o pacote)
             os.system("cls" if os.name == "nt" else "clear")
             print("="*50)
             print("=== JOGO DA MEMÓRIA MULTIPLAYER (Pygame Edition) ===")
@@ -445,7 +484,6 @@ def main():
             server_ip = input("\nDigite o IPv6 do servidor (Ex: 2804:14d::1): ").strip()
 
     else:
-        # Pula as perguntas se abrir via terminal
         my_name = sys.argv[1]
         if len(sys.argv) > 2:
             server_ip = sys.argv[2]
@@ -462,7 +500,6 @@ def main():
 
     sock.sendall(encode(CMD_JOIN, my_name))
     
-    # Inicia a Interface Gráfica após concluir as perguntas do terminal
     start_gui(sock)
 
 
