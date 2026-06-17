@@ -15,9 +15,11 @@ se forem iguais, marca ponto e joga de novo; se nao,
 as cartas voltam a ficar ocultas e o turno passa para
 o adversario. Vence quem encontrar mais pares.
 
-## Destaque Técnico:
+## Destaques Técnicos:
 
-A aplicação também possui um Chat em Tempo Real embutido, o que demonstra a capacidade do protocolo construído de multiplexar eventos síncronos (turnos do jogo) e assíncronos (mensagens de texto) através do mesmo socket TCP de forma não-bloqueante.
+* **Multiplexação (Chat + Jogo):** A aplicação possui um Chat em Tempo Real embutido, o que demonstra a capacidade do protocolo construído de multiplexar eventos síncronos (turnos do jogo) e assíncronos (mensagens de texto) através do mesmo socket TCP de forma não-bloqueante.
+* **Dual-Stack IPv4 e IPv6:** O servidor e o cliente possuem suporte inteligente e transparente para conexões simultâneas em IPv4 (redes locais/NAT) e IPv6 (internet global P2P), utilizando resolução de endereços moderna.
+* **Separação de Camadas (MVC):** A lógica de rede está totalmente desacoplada da interface. O cliente exibe um instalador interativo em terminal (Curses) para o *handshake* inicial e transfere o controle para um motor gráfico independente a 60 FPS (Pygame) para renderizar a partida, sem que uma thread bloqueie a outra.
 
 ---
 
@@ -38,12 +40,17 @@ escolha correta para esta aplicacao.
 
 ---
 
-## Requisitos Minimos
+## Requisitos Mínimos
 
 - Python 3.8 ou superior
-- Sem bibliotecas externas (apenas stdlib)
-- Rede TCP/IP funcional (funciona em localhost ou rede local)
-- 3 terminais: 1 servidor + 2 clientes
+- Rede TCP/IP funcional (funciona em localhost, rede local IPv4 ou Internet IPv6)
+- Biblioteca Gráfica Pygame
+
+**Instalação das dependências:**
+Antes de executar o cliente, instale a biblioteca gráfica do jogo:
+```bash
+pip install pygame
+```
 
 **Nota para Windows:** Se desejar a interface grafica no terminal
 (com setas e cores), instale o pacote opcional:
@@ -95,15 +102,15 @@ python client/client.py Alice 192.168.1.100
 
 ### 5. Jogando
 
-**Interface curses (Linux/Mac ou Windows com windows-curses):**
-* Use as **setas** para navegar pelo tabuleiro.
-* Pressione **ENTER** ou **ESPACO** para virar a carta.
-* Pressione **T** para abrir o modo Chat, digite sua mensagem e aperte ENTER para enviar.
-* Pressione **Q** para sair.
+Ao iniciar o `client.py`, um **Menu Interativo** aparecerá no terminal. 
+1. Use as **SETAS** do teclado para escolher o tipo de conexão (Local, IPv4 ou IPv6) e aperte **ENTER**.
+2. Digite o seu apelido e o IP fornecido pelo servidor.
+3. Após a conexão, o terminal ficará em segundo plano e a **Janela Gráfica do Jogo** (Pygame) se abrirá!
 
-**Interface console (Windows sem fallback):**
-* Digite o numero da posicao (0-15) e pressione Enter quando for sua vez.
-* Para usar o chat a qualquer momento, digite `/c sua mensagem aqui` e pressione Enter.
+**Controles dentro do Jogo:**
+* Utilize o **Mouse (Botão Esquerdo)** para interagir com o tabuleiro. As cartas possuem efeito tátil de elevação (*hover*) quando é o seu turno.
+* Para utilizar o **Chat em tempo real**, clique na barra inferior (ou pressione **T**), digite sua mensagem e aperte **ENTER**.
+* Pressione **ESC** ou **Q** para sair da partida.
 
 ```
      0    1    2    3
@@ -318,7 +325,7 @@ memory-game/
 +-- server/
 |   +-- server.py        # Servidor arbitro multi-thread com heartbeat
 +-- client/
-|   +-- client.py        # Cliente (curses no Linux/Mac, console no Windows)
+|   +-- client.py        # Cliente (Menu Wizard em Curses + Motor Gráfico em Pygame)
 +-- tests/
 |   +-- test_protocol.py # Testes unitarios do protocolo
 |   +-- test_full_game.py# Teste de integracao (2 FLIPs de Alice)
