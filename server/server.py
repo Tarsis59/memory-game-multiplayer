@@ -196,16 +196,19 @@ def handle_client(conn, addr):
         if player_name:
             print(f"[SERVER] '{player_name}' desconectou.")
             with room.lock:
-                remaining = room.other_player(player_name)
-                if remaining:
-                    scores = {p["name"]: p["score"] for p in room.players if p["name"] != player_name}
-                    winner = remaining["name"]
-                    try:
-                        remaining["conn"].sendall(encode(CMD_GAME_OVER, "", {
-                            "scores": scores, "winner": winner
-                        }))
-                    except Exception:
-                        pass
+                # ó declara vitória por abandono se o jogo AINDA NÃO TINHA ACABADO
+                if not room.all_revealed(): 
+                    remaining = room.other_player(player_name)
+                    if remaining:
+                        scores = {p["name"]: p["score"] for p in room.players if p["name"] != player_name}
+                        winner = remaining["name"]
+                        try:
+                            remaining["conn"].sendall(encode(CMD_GAME_OVER, "", {
+                                "scores": scores, "winner": winner
+                            }))
+                        except Exception:
+                            pass
+                
                 room.players = []
                 room.last_seen.pop(player_name, None)
         conn.close()

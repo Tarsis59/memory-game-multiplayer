@@ -152,22 +152,26 @@ def receiver(sock):
             scores.update(payload.get("scores", {}))
 
         elif command == CMD_GAME_OVER and payload:
-            my_turn   = False
-            final_scores = payload.get("scores", {})
-            winner       = payload.get("winner", "?")
-            scores.update(final_scores)
-            
-            time.sleep(1.0)
-            if winner == "EMPATE":
-                set_status("FIM DE JOGO: EMPATE!", "win")
-            else:
-                set_status(f"VENCEDOR: {winner}!", "win")
-            game_over = True
+            if not game_over:  # Bloqueia mensagens atrasadas se o jogo já acabou
+                my_turn   = False
+                final_scores = payload.get("scores", {})
+                winner       = payload.get("winner", "?")
+                scores.update(final_scores)
+                
+                final_winner = winner 
+                
+                time.sleep(1.0)
+                if winner == "EMPATE":
+                    set_status("FIM DE JOGO: EMPATE!", "win")
+                else:
+                    set_status(f"VENCEDOR: {winner}!", "win")
+                game_over = True
 
         elif command == CMD_PLAYER_LEFT:
-            my_turn   = False
-            set_status(f"O jogador {arg} abandonou a partida.", "error")
-            game_over = True
+            if not game_over:  # Bloqueia falsos abandonos se o jogo já acabou
+                my_turn   = False
+                set_status(f"O jogador {arg} abandonou a partida.", "error")
+                game_over = True
 
         elif command == CMD_ERR:
             set_status(f"ERRO: {arg}", "error")
