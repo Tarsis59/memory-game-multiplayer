@@ -112,18 +112,7 @@ Ao iniciar o `client.py`, um **Menu Interativo** aparecerá no terminal.
 * Para utilizar o **Chat em tempo real**, clique na barra inferior (ou pressione **T**), digite sua mensagem e aperte **ENTER**.
 * Pressione **ESC** ou **Q** para sair da partida.
 
-```
-     0    1    2    3
-  +----+----+----+----+
-0 |  ? |  ? |  ? |  ? |
-  +----+----+----+----+
-1 |  ? |  ? |  ? |  ? |
-  +----+----+----+----+
-2 |  ? |  ? |  ? |  ? |
-  +----+----+----+----+
-3 |  ? |  ? |  ? |  ? |
-  +----+----+----+----+
-```
+<img width="996" height="680" alt="print_ylo" src="https://github.com/user-attachments/assets/ce7b7f74-0f41-49a3-afc4-bee8d10782b6" />
 
 ### 6. Rodar testes do protocolo
 
