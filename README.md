@@ -78,33 +78,33 @@ python server/server.py
 
 Saida esperada:
 ```
-[SERVER] MGAME/1.0 aguardando jogadores em 0.0.0.0:9000...
+ Modo: Dual-Stack (IPv4 e IPv6)
+ Porta: 9000
+ -> Para jogar neste PC, o cliente liga em: localhost
+ -> Para jogar na mesma rede, o cliente liga em: 172.26.19.141
+==================================================
+[SERVER] A aguardar por 2 jogadores...
 ```
 
 ### 3. Terminal 2 — Primeiro jogador
 
 ```bash
 cd memory-game
-python client/client.py Alice
+python client/client.py 
 ```
 
 ### 4. Terminal 3 — Segundo jogador
 
 ```bash
 cd memory-game
-python client/client.py Bob
-```
-
-Para conectar em um servidor remoto, informe o IP como segundo argumento:
-```bash
-python client/client.py Alice 192.168.1.100
+python client/client.py 
 ```
 
 ### 5. Jogando
 
 Ao iniciar o `client.py`, um **Menu Interativo** aparecerá no terminal. 
 1. Use as **SETAS** do teclado para escolher o tipo de conexão (Local, IPv4 ou IPv6) e aperte **ENTER**.
-2. Digite o seu apelido e o IP fornecido pelo servidor.
+2. Digite o seu apelido e o IP fornecido pelo servidor (Se for local, não irá precisar).
 3. Após a conexão, o terminal ficará em segundo plano e a **Janela Gráfica do Jogo** (Pygame) se abrirá!
 
 **Controles dentro do Jogo:**
@@ -131,7 +131,7 @@ python tests/run_demo.py
 ## Heartbeat (PING / PONG)
 
 O servidor monitora a conectividade dos jogadores a cada 10 segundos.
-Conexões inativas por mais de 10 segundos sao automaticamente
+Conexões inativas por mais de 60 segundos sao automaticamente
 fechadas, garantindo que uma queda de rede nao trave a partida.
 
 | Mensagem | Direcao | Descricao |
@@ -150,7 +150,7 @@ COMANDO ARGUMENTO\r\n
 [JSON_PAYLOAD]\r\n   <- presente apenas quando ha dados estruturados
 ```
 
-### Tabela de Mensagens (20 mensagens)
+### Tabela de Mensagens (22 mensagens)
 
 | Mensagem | Direcao | Descricao |
 |---|---|---|
@@ -179,7 +179,7 @@ COMANDO ARGUMENTO\r\n
 
 ### Diagrama de Estados — Servidor
 
-```
+```text
                          +-------------------+
                          | AGUARDANDO        |
                          | JOGADORES         |
@@ -193,114 +193,122 @@ COMANDO ARGUMENTO\r\n
                          +--------+----------+
                                   |
                                   v
+    +------------------->+-------------------+
+    |                    | TURNO ATUAL       |
+    |                    +--------+----------+
+    |                             |
+    |                        FLIP 1 carta
+    |                             |
+    |                             v
+    |                    +-------------------+
+    |                    | AGUARDA 2 CARTA   |
+    |                    +--------+----------+
+    |                             |
+    |                        FLIP 2 carta
+    |                             |
+    |                +------------+------------+
+    |                |                         |
+    |                v                         v
+    |       +-------------------+   +-------------------+
+    |       | PAR_CERTO         |   | SEM_PAR           |
+    |       | pontua jogador    |   | inverte o turno   |
+    |       +--------+----------+   +--------+----------+
+    |                |                         |
+    |          todas reveladas?                |
+    |          /            \                  |
+    |        NÃO            SIM                |
+    |        /                \                |
+    +-------+                  +---------------+
+                               |
+                               v
+    (Qualquer momento)   +-------------------+
+      Desconexão ------> | GAME_OVER         |---- broadcast resultado
                          +-------------------+
-                         | TURNO_J1          |---- FLIP 1 carta
-                         +--------+----------+
-                                  |
-                                  v
-                         +-------------------+
-                         | AGUARDA 2 CARTA   |
-                         +--------+----------+
-                                  |
-                     +------------+------------+
-                     |                         |
-                     v                         v
-            +-------------------+   +-------------------+
-            | PAR_CERTO         |   | SEM_PAR           |
-            | pontua J1         |   | passa turno       |
-            +-------------------+   +-------------------+
-                     |                         |
-                     v                         v
-            +-------------------+   +-------------------+
-            | TURNO_J1          |   | TURNO_J2          |
-            | (joga de novo)    |   |                   |
-            +-------------------+   +-------------------+
-                     |                         |
-                     +---- todas cartas --------+
-                                  |
-                                  v
-                         +-------------------+
-                         | GAME_OVER         |---- broadcast resultado
-                         +-------------------+
+
+*Nota: Eventos de CHAT e PING/PONG ocorrem de forma assíncrona e não interferem na máquina de estados principal do jogo.
 ```
 
 ### Diagrama de Estados — Cliente
 
-```
+```text
 +-------------------+
-| OFFLINE           |---- TCP connect
+| OFFLINE (Menu)    |---- Escolhe rede e conecta (TCP)
 +--------+----------+
          |
          v
 +-------------------+
-| JOINING           |---- JOIN <nome>
+| JOINING           |---- Envia JOIN <nome>
 +--------+----------+
          |
          v
 +-------------------+
-| WAITING_OPPONENT  |
+| WAITING_OPPONENT  |---- Recebe OK WAITING
 +--------+----------+
          |
     GAME_START
          |
          v
 +-------------------+
-| IN_GAME           |
+| IN_GAME           | <---------------------------+
++--------+----------+                             |
+         |                                        |
+    +----+----+                                   |
+    |         |                                   |
+    v         v                                   |
++--------+  +--------+                            |
+|MY_TURN |  |OPP_TURN|                            |
+|FLIP n  |  |aguarda |                            |
++--------+  +--------+                            |
+    |         |                                   |
+    +----+----+                                   |
+         |                                        |
+    CARD_REVEALED                                 |
+    MATCH / NO_MATCH                              |
+    SCORE_UPDATE                                  |
+         |                                        |
+         +----------------------------------------+
+         |
+     GAME_OVER ou PLAYER_LEFT
+         |
+         v
++-------------------+
+| POPUP FIM DE JOGO |---- Aguarda jogador pressionar ENTER
 +--------+----------+
          |
-    +----+----+
-    |         |
-    v         v
-+--------+  +--------+
-|MY_TURN |  |OPP_TURN|
-|FLIP n  |  |aguarda |
-+--------+  +--------+
-    |         |
-    +----+----+
-         |
-    CARD_REVEALED
-    MATCH / NO_MATCH
-    SCORE_UPDATE
-         |
          v
 +-------------------+
-| IN_GAME (loop)    |---- ate GAME_OVER
-+-------------------+
-         |
-         v
-+-------------------+
-| GAME_OVER         |---- OFFLINE
+| OFFLINE / FECHA   |---- Envia QUIT e encerra Pygame
 +-------------------+
 ```
 
 ### Exemplo de Sessao Completa
 
 ```
-Alice -> Servidor:  JOIN Alice\r\n
-Servidor -> Alice:  OK WAITING\r\n
+Ylo -> Servidor:  JOIN Ylo\r\n
+Servidor -> Ylo:  OK WAITING\r\n
 
-Bob -> Servidor:    JOIN Bob\r\n
-Servidor -> Bob:    OK WAITING\r\n
+Tarsis -> Servidor:    JOIN Tarsis\r\n
+Servidor -> Tarsis:    OK WAITING\r\n
 
-Servidor -> Alice:  GAME_START \r\n
-                    {"board_size":16,"players":["Alice","Bob"],"hidden":["?",...]}\r\n
-Servidor -> Bob:    GAME_START \r\n (mesma mensagem)
+Servidor -> Ylo:  GAME_START \r\n
+                    {"board_size":16,"players":["Ylo","Tarsis"],"hidden":["?",...]}\r\n
+Servidor -> Tarsis:    GAME_START \r\n (mesma mensagem)
 
-Servidor -> Alice:  YOUR_TURN\r\n
-Servidor -> Bob:    WAIT_TURN Alice\r\n
+Servidor -> Ylo:  YOUR_TURN\r\n
+Servidor -> Tarsis:    WAIT_TURN Ylo\r\n
 
-Alice -> Servidor:  FLIP 3\r\n
-Servidor -> todos:  CARD_REVEALED {"pos":3,"symbol":"A","player":"Alice"}\r\n
+Ylo -> Servidor:  FLIP 3\r\n
+Servidor -> todos:  CARD_REVEALED {"pos":3,"symbol":"A","player":"Ylo"}\r\n
 
-Alice -> Servidor:  FLIP 11\r\n
+Ylo -> Servidor:  FLIP 11\r\n
 Servidor -> todos:  CARD_REVEALED {"pos":11,"symbol":"A",...}\r\n
-Servidor -> todos:  MATCH {"positions":[3,11],"symbol":"A","player":"Alice"}\r\n
-Servidor -> todos:  SCORE_UPDATE {"scores":{"Alice":1,"Bob":0}}\r\n
-Servidor -> Alice:  YOUR_TURN\r\n (Alice joga de novo por ter acertado)
+Servidor -> todos:  MATCH {"positions":[3,11],"symbol":"A","player":"Ylo"}\r\n
+Servidor -> todos:  SCORE_UPDATE {"scores":{"Ylo":1,"Tarsis":0}}\r\n
+Servidor -> Ylo:  YOUR_TURN\r\n (Ylo joga de novo por ter acertado)
 
 ...
 
-Servidor -> todos:  GAME_OVER {"scores":{"Alice":5,"Bob":3},"winner":"Alice"}\r\n
+Servidor -> todos:  GAME_OVER {"scores":{"Ylo":5,"Tarsis":3},"winner":"Ylo"}\r\n
 ```
 
 ---
@@ -317,7 +325,7 @@ memory-game/
 |   +-- client.py        # Cliente (Menu Wizard em Curses + Motor Gráfico em Pygame)
 +-- tests/
 |   +-- test_protocol.py # Testes unitarios do protocolo
-|   +-- test_full_game.py# Teste de integracao (2 FLIPs de Alice)
+|   +-- test_full_game.py# Teste de integracao (2 FLIPs de Ylo)
 |   +-- run_demo.py      # Demo automatica server + 2 clients
 +-- README.md
 +-- requirements.txt
@@ -329,7 +337,7 @@ memory-game/
 ## Autores
 
 - Tarsis Carvalho Barreto
-- Ylo Bittencourt
+- Ylo Silva de Sá Bittencourt
 
 ## Licenca
 

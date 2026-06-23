@@ -10,10 +10,10 @@ def check(name, condition):
 
 
 def test_join():
-    raw = encode("JOIN", "Alice").decode()
+    raw = encode("JOIN", "Ylo").decode()
     cmd, arg, payload = decode(raw)
     check("JOIN command", cmd == "JOIN")
-    check("JOIN arg = Alice", arg == "Alice")
+    check("JOIN arg = Ylo", arg == "Ylo")
     check("JOIN sem payload", payload is None)
 
 
@@ -25,16 +25,16 @@ def test_flip():
 
 
 def test_game_start_payload():
-    data = {"board_size": 16, "players": ["Alice", "Bob"], "hidden": ["?"] * 16}
+    data = {"board_size": 16, "players": ["Ylo", "Tarsis"], "hidden": ["?"] * 16}
     raw = encode("GAME_START", "", data).decode()
     cmd, arg, payload = decode(raw)
     check("GAME_START command", cmd == "GAME_START")
     check("GAME_START board_size", payload["board_size"] == 16)
-    check("GAME_START players", payload["players"] == ["Alice", "Bob"])
+    check("GAME_START players", payload["players"] == ["Ylo", "Tarsis"])
 
 
 def test_match_payload():
-    data = {"positions": [3, 11], "symbol": "A", "player": "Alice"}
+    data = {"positions": [3, 11], "symbol": "A", "player": "Ylo"}
     raw = encode("MATCH", "", data).decode()
     cmd, _, payload = decode(raw)
     check("MATCH command", cmd == "MATCH")
@@ -52,12 +52,12 @@ def test_ok_err():
 
 
 def test_game_over():
-    data = {"scores": {"Alice": 5, "Bob": 3}, "winner": "Alice"}
+    data = {"scores": {"Ylo": 5, "Tarsis": 3}, "winner": "Ylo"}
     raw = encode("GAME_OVER", "", data).decode()
     cmd, _, payload = decode(raw)
     check("GAME_OVER command", cmd == "GAME_OVER")
-    check("GAME_OVER winner", payload["winner"] == "Alice")
-    check("GAME_OVER scores", payload["scores"]["Alice"] == 5)
+    check("GAME_OVER winner", payload["winner"] == "Ylo")
+    check("GAME_OVER scores", payload["scores"]["Ylo"] == 5)
 
 
 if __name__ == "__main__":

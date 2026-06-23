@@ -81,13 +81,13 @@ def main():
     time.sleep(1.5)
 
     results = {}
-    flips_alice = [0, 8, 3, 11, 6, 14]
-    flips_bob   = [1, 9, 4, 12, 7, 15]
+    flips_Ylo = [0, 8, 3, 11, 6, 14]
+    flips_Tarsis   = [1, 9, 4, 12, 7, 15]
 
     try:
-        print("[DEMO] Conectando Alice e Bob...")
-        t1 = threading.Thread(target=play_as, args=("Alice", flips_alice, results))
-        t2 = threading.Thread(target=play_as, args=("Bob", flips_bob, results))
+        print("[DEMO] Conectando Ylo e Tarsis...")
+        t1 = threading.Thread(target=play_as, args=("Ylo", flips_Ylo, results))
+        t2 = threading.Thread(target=play_as, args=("Tarsis", flips_Tarsis, results))
         t1.start()
         t2.start()
         t1.join(timeout=30)
