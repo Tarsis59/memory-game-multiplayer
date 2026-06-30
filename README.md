@@ -869,6 +869,8 @@ ERR_INVALID_POS = "INVALID_POS"; ERR_ALREADY_OPEN = "ALREADY_OPEN"
 
 - Tarsis Carvalho Barreto
 - Ylo Silva de Sá Bittencourt
+- Henrique Barreto Pereira
+- Thiago Pereira
 
 ## Licenca
 
